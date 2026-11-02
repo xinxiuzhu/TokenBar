@@ -42,6 +42,12 @@ if [[ ! -x "${BIN}" ]]; then
   exit 1
 fi
 
+ICON_SRC="${ROOT}/assets/AppIcon.icns"
+if [[ ! -f "${ICON_SRC}" ]]; then
+  echo "missing ${ICON_SRC}; run packaging/icons/make-icons.py" >&2
+  exit 1
+fi
+
 OUT="${ROOT}/dist/tokenbar-${ARCH_NAME}"
 APP="${OUT}/TokenBar.app"
 rm -rf "${OUT}"
@@ -49,6 +55,8 @@ mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 cp "${BIN}" "${APP}/Contents/MacOS/tokenbar"
 chmod 755 "${APP}/Contents/MacOS/tokenbar"
 cp "${BIN}" "${OUT}/tokenbar"
+# Finder and Launchpad use CFBundleIconFile → Contents/Resources/AppIcon.icns.
+cp "${ICON_SRC}" "${APP}/Contents/Resources/AppIcon.icns"
 
 cat > "${APP}/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -71,6 +79,8 @@ cat > "${APP}/Contents/Info.plist" <<EOF
   <string>${VERSION}</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>LSMinimumSystemVersion</key>
   <string>12.0</string>
   <key>LSUIElement</key>

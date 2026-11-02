@@ -49,6 +49,20 @@ jobs:
           set -euo pipefail
           TARGET="${{ matrix.target }}" ./packaging/macos/package.sh
           staged="dist/tokenbar-${{ matrix.target }}"
+          icon="${staged}/TokenBar.app/Contents/Resources/AppIcon.icns"
+          plist="${staged}/TokenBar.app/Contents/Info.plist"
+          test -s "${icon}"
+          python3 - "${icon}" "${plist}" <<'PY'
+          import pathlib, sys
+          icon, plist = sys.argv[1:]
+          data = pathlib.Path(icon).read_bytes()
+          if data[:4] != b"icns":
+              raise SystemExit("AppIcon.icns missing magic")
+          text = pathlib.Path(plist).read_text()
+          if "<key>CFBundleIconFile</key>" not in text or "<string>AppIcon</string>" not in text:
+              raise SystemExit("Info.plist does not reference AppIcon")
+          print("bundled AppIcon.icns")
+          PY
           cp LICENSE NOTICE README.md "${staged}/"
           tokenbar_offline="${staged}/tokenbar"
           output="$(TOKENBAR_OFFLINE=1 "${tokenbar_offline}" --check)"
@@ -68,7 +82,8 @@ jobs:
           python3 -c 'import json,sys; data=json.loads(sys.argv[1]); assert data["title"]=="R ██░░ · C █░░░ · O 1.2k", data; assert data["offline"] is True' "${output}"
           stage="dist/tokenbar-${{ matrix.target }}"
           mkdir -p "${stage}"
-          cp "${bin}" LICENSE NOTICE README.md "${stage}/"
+          cp "${bin}" LICENSE NOTICE README.md assets/tokenbar.png packaging/linux/app.tokenbar.TokenBar.desktop "${stage}/"
+          test -s "${stage}/tokenbar.png"
           tar -C dist -czf "${{ matrix.asset }}" "tokenbar-${{ matrix.target }}"
 
       - name: Windows binary
@@ -84,7 +99,8 @@ jobs:
           if ($output -notmatch 'R ██░░ · C █░░░ · O 1\.2k') { throw "offline check failed: $output" }
           $stage = "dist/tokenbar-${{ matrix.target }}"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Copy-Item $bin, LICENSE, NOTICE, README.md $stage
+          Copy-Item $bin, LICENSE, NOTICE, README.md, assets/tokenbar.ico $stage
+          if (-not (Test-Path "$stage/tokenbar.ico")) { throw "missing tokenbar.ico in release stage" }
           Compress-Archive -Path "$stage/*" -DestinationPath "${{ matrix.asset }}"
 
       - uses: actions/upload-artifact@v4
@@ -116,10 +132,10 @@ jobs:
 
             Assets:
 
-            - `tokenbar-aarch64-apple-darwin.tar.gz` — `TokenBar.app` (`LSUIElement`)
+            - `tokenbar-aarch64-apple-darwin.tar.gz` — `TokenBar.app` (`LSUIElement`, `Contents/Resources/AppIcon.icns`)
             - `tokenbar-x86_64-apple-darwin.tar.gz` — Intel Mac app and binary
-            - `tokenbar-x86_64-unknown-linux-gnu.tar.gz`
-            - `tokenbar-x86_64-pc-windows-msvc.zip`
+            - `tokenbar-x86_64-unknown-linux-gnu.tar.gz` — binary plus `tokenbar.png`
+            - `tokenbar-x86_64-pc-windows-msvc.zip` — exe with embedded `tokenbar.ico`
 
             `TOKENBAR_OFFLINE=1 tokenbar --check` prints a snapshot whose `title` is a remaining-balance block meter.
             Each archive includes `LICENSE`, `NOTICE`, and `README.md`.

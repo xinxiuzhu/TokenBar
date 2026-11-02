@@ -7,10 +7,25 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Menu-bar tray for Cursor, Claude, and OpenAI usage"
 publish = false
+build = "build.rs"
 
 [[bin]]
 name = "tokenbar"
 path = "src/main.rs"
+
+# cargo-bundle selects the icon by extension. Paths are relative to this crate.
+[package.metadata.bundle]
+name = "TokenBar"
+identifier = "app.tokenbar.TokenBar"
+icon = [
+  "../../assets/AppIcon.icns",
+  "../../assets/tokenbar.ico",
+  "../../assets/tokenbar.png",
+]
+
+# cargo-wix MSI product icon. The exe icon is embedded by build.rs (winres).
+[package.metadata.wix]
+product-icon = "../../assets/tokenbar.ico"
 
 [dependencies]
 gpui-kit = { version = "=0.6.6", default-features = false }
@@ -20,3 +35,6 @@ tokenbar-core = { path = "../tokenbar-core" }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSRunningApplication"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
