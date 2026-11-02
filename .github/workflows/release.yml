@@ -53,7 +53,7 @@ jobs:
           tokenbar_offline="${staged}/tokenbar"
           output="$(TOKENBAR_OFFLINE=1 "${tokenbar_offline}" --check)"
           printf '%s\n' "${output}"
-          python3 -c 'import json,sys; data=json.loads(sys.argv[1]); assert data["title"]=="R 42% · C 72% · O 1.2k", data' "${output}"
+          python3 -c 'import json,sys; data=json.loads(sys.argv[1]); assert data["title"]=="R ██░░ · C █░░░ · O 1.2k", data' "${output}"
           tar -C dist -czf "${{ matrix.asset }}" "tokenbar-${{ matrix.target }}"
 
       - name: Linux binary
@@ -65,7 +65,7 @@ jobs:
           bin="target/${{ matrix.target }}/release/tokenbar"
           output="$(TOKENBAR_OFFLINE=1 "${bin}" --check)"
           printf '%s\n' "${output}"
-          python3 -c 'import json,sys; data=json.loads(sys.argv[1]); assert data["title"]=="R 42% · C 72% · O 1.2k", data; assert data["offline"] is True' "${output}"
+          python3 -c 'import json,sys; data=json.loads(sys.argv[1]); assert data["title"]=="R ██░░ · C █░░░ · O 1.2k", data; assert data["offline"] is True' "${output}"
           stage="dist/tokenbar-${{ matrix.target }}"
           mkdir -p "${stage}"
           cp "${bin}" LICENSE NOTICE README.md "${stage}/"
@@ -81,7 +81,7 @@ jobs:
           $env:TOKENBAR_OFFLINE = "1"
           $output = & $bin --check | Out-String
           Write-Host $output
-          if ($output -notmatch 'R 42% · C 72% · O 1\.2k') { throw "offline check failed: $output" }
+          if ($output -notmatch 'R ██░░ · C █░░░ · O 1\.2k') { throw "offline check failed: $output" }
           $stage = "dist/tokenbar-${{ matrix.target }}"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item $bin, LICENSE, NOTICE, README.md $stage
@@ -121,7 +121,7 @@ jobs:
             - `tokenbar-x86_64-unknown-linux-gnu.tar.gz`
             - `tokenbar-x86_64-pc-windows-msvc.zip`
 
-            `TOKENBAR_OFFLINE=1 tokenbar --check` prints a snapshot whose `title` is `R 42% · C 72% · O 1.2k`.
+            `TOKENBAR_OFFLINE=1 tokenbar --check` prints a snapshot whose `title` is a remaining-balance block meter.
             Each archive includes `LICENSE`, `NOTICE`, and `README.md`.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

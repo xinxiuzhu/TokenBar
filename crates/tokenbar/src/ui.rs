@@ -43,6 +43,7 @@ struct Shell {
     expanded: Option<ProviderId>,
     saved: SecretPresence,
     settings: DisplaySettings,
+    brand_icon: Icon,
 }
 
 impl Global for Shell {}
@@ -90,7 +91,7 @@ impl Render for Panel {
             .flex_col()
             .bg(rgb(BG))
             .text_color(rgb(TEXT))
-            .child(header(&subtitle, &providers, settings.title_mode))
+            .child(header(&subtitle, &providers, TitleMode::PercentText))
             .child(
                 div()
                     .id("tokenbar-body")
@@ -409,24 +410,24 @@ fn settings_card(
                 .flex()
                 .gap(px(6.))
                 .child(mode_button(
-                    "mode-used",
-                    "已用",
-                    settings.title_mode == TitleMode::UsedPercent,
-                    TitleMode::UsedPercent,
+                    "mode-bars",
+                    "条状余额",
+                    settings.title_mode == TitleMode::BalanceBars,
+                    TitleMode::BalanceBars,
                     cx,
                 ))
                 .child(mode_button(
-                    "mode-left",
-                    "剩余",
-                    settings.title_mode == TitleMode::RemainingPercent,
-                    TitleMode::RemainingPercent,
+                    "mode-text",
+                    "百分比",
+                    settings.title_mode == TitleMode::PercentText,
+                    TitleMode::PercentText,
                     cx,
                 ))
                 .child(mode_button(
-                    "mode-tokens",
-                    "Token",
-                    settings.title_mode == TitleMode::Tokens,
-                    TitleMode::Tokens,
+                    "mode-icon",
+                    "仅图标",
+                    settings.title_mode == TitleMode::IconOnly,
+                    TitleMode::IconOnly,
                     cx,
                 )),
         )
@@ -635,13 +636,42 @@ fn commit_settings(cx: &mut Context<Panel>, mutate: &impl Fn(&mut DisplaySetting
 }
 
 fn publish_title(cx: &mut App) {
-    let title = {
+    let (mode, title, tooltip, brand, providers) = {
         let shell = cx.global::<Shell>();
-        shell.settings.menu_title(&shell.snapshot.providers)
+        let visible: Vec<ProviderSnapshot> = shell
+            .snapshot
+            .providers
+            .iter()
+            .filter(|provider| shell.settings.shows(provider.id))
+            .cloned()
+            .collect();
+        let title = shell.settings.menu_title(&shell.snapshot.providers);
+        let tooltip = tokenbar_core::tray_title(&visible, TitleMode::PercentText);
+        (
+            shell.settings.title_mode,
+            title,
+            tooltip,
+            shell.brand_icon.clone(),
+            visible,
+        )
     };
     let tray = cx.global::<Shell>().tray.clone();
-    let _ = tray.set_title(Some(title.clone()), cx);
-    let _ = tray.set_tooltip(Some(format!("TokenBar {title}")), cx);
+    let _ = tray.set_tooltip(Some(format!("TokenBar {tooltip}")), cx);
+    if mode == TitleMode::IconOnly {
+        let _ = tray.set_title(None::<String>, cx);
+        match meter_icon(&providers) {
+            Ok(icon) => {
+                let _ = tray.set_icon(icon, cx);
+            }
+            Err(_) => {
+                let _ = tray.set_icon(brand, cx);
+            }
+        }
+        return;
+    }
+    let shown = if title.is_empty() { None } else { Some(title) };
+    let _ = tray.set_title(shown, cx);
+    let _ = tray.set_icon(brand, cx);
 }
 
 fn face_for(provider: &ProviderSnapshot) -> RowFace {
@@ -889,10 +919,6 @@ fn keep_last_known(previous: &[ProviderSnapshot], fresh: &mut [ProviderSnapshot]
 fn apply_snapshot(cx: &mut App, mut snapshot: UsageSnapshot) {
     let previous = cx.global::<Shell>().snapshot.providers.clone();
     keep_last_known(&previous, &mut snapshot.providers);
-    let title = cx
-        .global::<Shell>()
-        .settings
-        .menu_title(&snapshot.providers);
     {
         let shell = cx.global_mut::<Shell>();
         shell.snapshot = snapshot;
@@ -900,11 +926,7 @@ fn apply_snapshot(cx: &mut App, mut snapshot: UsageSnapshot) {
             shell.status.clear();
         }
     }
-    let tray = cx.global::<Shell>().tray.clone();
-    if let Err(err) = tray.set_title(Some(title.clone()), cx) {
-        cx.global_mut::<Shell>().status = format!("托盘标题更新失败：{err}");
-    }
-    let _ = tray.set_tooltip(Some(format!("TokenBar {title}")), cx);
+    publish_title(cx);
     let window = cx.global::<Shell>().window;
     if let Some(window) = window {
         let alive = window.update(cx, |_panel, _window, cx| cx.notify()).is_ok();
@@ -936,8 +958,9 @@ pub fn run() {
 
 fn setup(cx: &mut App) -> gpui_tray::Result<()> {
     set_accessory();
+    let brand = tray_icon(cx)?;
     let tray = Tray::builder()
-        .icon(tray_icon(cx)?)
+        .icon(brand.clone())
         .title("TokenBar")
         .tooltip("TokenBar")
         .on_activate_with(|_token, cx| open_panel(cx))
@@ -951,8 +974,10 @@ fn setup(cx: &mut App) -> gpui_tray::Result<()> {
         expanded: None,
         saved: secret_presence(),
         settings: load_settings(),
+        brand_icon: brand,
     });
     start_refresh_loop(cx);
+    publish_title(cx);
     eprintln!("TokenBar is running in the menu bar. Click the icon to open the panel.");
     Ok(())
 }
@@ -1044,6 +1069,56 @@ fn tray_icon(cx: &App) -> gpui_tray::Result<Icon> {
             eprintln!("SVG tray icon failed ({err}); using the ring fallback");
             ring_fallback()
         }
+    }
+}
+
+fn meter_icon(providers: &[ProviderSnapshot]) -> gpui_tray::Result<Icon> {
+    let rows: Vec<f64> = providers
+        .iter()
+        .filter_map(|provider| provider.used_percent.map(tokenbar_core::remaining_percent))
+        .take(3)
+        .collect();
+    if rows.is_empty() {
+        return Err(gpui_tray::Error::InvalidIcon("no quota to draw".into()));
+    }
+    const SIZE: u32 = 36;
+    let mut rgba = vec![0_u8; (SIZE * SIZE * 4) as usize];
+    let count = rows.len() as u32;
+    let bar_h = 5u32;
+    let gap = 3u32;
+    let total_h = count * bar_h + (count - 1) * gap;
+    let top = (SIZE - total_h) / 2;
+    let inset = 4u32;
+    let inner = SIZE - inset * 2;
+    for (index, remaining) in rows.iter().enumerate() {
+        let y0 = top + index as u32 * (bar_h + gap);
+        let color = remaining_rgb(*remaining);
+        let fill = ((inner as f64) * (remaining / 100.0)).round() as u32;
+        for y in y0..y0 + bar_h {
+            for x in inset..SIZE - inset {
+                let painted = if x < inset + fill {
+                    [color[0], color[1], color[2], 255]
+                } else {
+                    [0x8E, 0x8E, 0x93, 150]
+                };
+                let offset = ((y * SIZE + x) * 4) as usize;
+                rgba[offset..offset + 4].copy_from_slice(&painted);
+            }
+        }
+    }
+    let builder = Icon::from_rgba(rgba, SIZE, SIZE);
+    #[cfg(target_os = "macos")]
+    let builder = builder.template(false).scale_factor(2.0);
+    builder.build()
+}
+
+fn remaining_rgb(remaining: f64) -> [u8; 3] {
+    if remaining >= 50.0 {
+        [0x30, 0xD1, 0x58]
+    } else if remaining >= 20.0 {
+        [0xFF, 0x9F, 0x0A]
+    } else {
+        [0xFF, 0x45, 0x3A]
     }
 }
 

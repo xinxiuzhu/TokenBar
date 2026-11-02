@@ -332,9 +332,9 @@ mod tests {
         assert_eq!(snapshot.tokens, Some(15));
         assert_eq!(
             snapshot
-                .menu_label(crate::format::TitleMode::UsedPercent)
+                .menu_label(crate::format::TitleMode::PercentText)
                 .as_deref(),
-            Some("C 72%")
+            Some("C 28%")
         );
         assert_eq!(snapshot.plan.as_deref(), Some("pro"));
         assert!(snapshot.error.is_none(), "{:?}", snapshot.error);

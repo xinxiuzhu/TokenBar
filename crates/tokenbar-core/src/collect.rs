@@ -76,7 +76,7 @@ mod tests {
     fn offline_stub_matches_tray_example() {
         let snapshot = offline_snapshot();
         assert!(snapshot.offline);
-        assert_eq!(snapshot.title, "R 42% · C 72% · O 1.2k");
+        assert_eq!(snapshot.title, "R ██░░ · C █░░░ · O 1.2k");
         assert_eq!(snapshot.providers[0].remaining_percent, Some(58.0));
         assert_eq!(snapshot.providers[1].remaining_percent, Some(28.0));
         assert_eq!(snapshot.providers[0].used_percent, Some(42.0));
@@ -148,7 +148,7 @@ mod tests {
             ],
         };
         let snapshot = collect_live(&http, &secrets, &paths);
-        assert_eq!(snapshot.title, "R 42% · C 72% · O 1.2k");
+        assert_eq!(snapshot.title, "R ██░░ · C █░░░ · O 1.2k");
         assert_eq!(snapshot.providers[0].remaining_percent, Some(58.0));
         assert_eq!(snapshot.providers[1].remaining_percent, Some(28.0));
         assert!(!snapshot.offline);

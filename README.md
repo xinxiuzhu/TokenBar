@@ -1,6 +1,6 @@
 # TokenBar
 
-菜单栏里看 Cursor、Claude 和 OpenAI 的用量。托盘标题类似 `R 42% · C 72% · O 1.2k`，没有数据的服务不显示。
+菜单栏里看 Cursor、Claude 和 OpenAI 的用量。托盘默认是余额条（满条表示剩余多），没有数据的服务不显示。
 
 Menu-bar usage for Cursor, Claude, and OpenAI.
 

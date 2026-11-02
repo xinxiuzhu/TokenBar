@@ -360,7 +360,7 @@ mod tests {
         assert!(snapshot.used_percent.is_none());
         assert_eq!(
             snapshot
-                .menu_label(crate::format::TitleMode::UsedPercent)
+                .menu_label(crate::format::TitleMode::PercentText)
                 .as_deref(),
             Some("O 1.2k")
         );
@@ -396,9 +396,9 @@ mod tests {
         let snapshot = fetch(&http, &MemoryStore::new(), &paths);
         assert_eq!(
             snapshot
-                .menu_label(crate::format::TitleMode::UsedPercent)
+                .menu_label(crate::format::TitleMode::PercentText)
                 .as_deref(),
-            Some("O 12.5%")
+            Some("O 87.5%")
         );
         assert_eq!(snapshot.plan.as_deref(), Some("pro"));
         let _ = fs::remove_dir_all(dir);

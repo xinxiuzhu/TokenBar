@@ -40,7 +40,7 @@ impl Default for DisplaySettings {
             show_cursor: true,
             show_claude: true,
             show_openai: true,
-            title_mode: TitleMode::UsedPercent,
+            title_mode: TitleMode::BalanceBars,
             refresh_secs: 300,
         }
     }
@@ -119,11 +119,11 @@ mod tests {
             show_cursor: false,
             ..DisplaySettings::default()
         };
-        assert_eq!(hidden.menu_title(&providers), "C 62%");
-        let remaining = DisplaySettings {
-            title_mode: TitleMode::RemainingPercent,
+        assert_eq!(hidden.menu_title(&providers), "C ███░░░░░ 38");
+        let text = DisplaySettings {
+            title_mode: TitleMode::PercentText,
             ..DisplaySettings::default()
         };
-        assert_eq!(remaining.menu_title(&providers), "R 58% · C 38%");
+        assert_eq!(text.menu_title(&providers), "R 58% · C 38%");
     }
 }

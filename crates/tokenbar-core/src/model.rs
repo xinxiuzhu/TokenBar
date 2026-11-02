@@ -114,7 +114,7 @@ impl UsageSnapshot {
             .into_iter()
             .map(ProviderSnapshot::with_derived)
             .collect();
-        let title = tray_title(&providers, TitleMode::UsedPercent);
+        let title = tray_title(&providers, TitleMode::BalanceBars);
         Self {
             generated_at: crate::format::now_rfc3339(),
             offline,

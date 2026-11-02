@@ -1,23 +1,24 @@
 //! Tray title formatting.
 //!
-//! Providers with no quota and no tokens are omitted. The default reads
-//! `R 42% · C 72% · O 1.2k`.
+//! gpui-tray exposes the macOS status item title as a plain string, so the
+//! default meter is a unicode bar of remaining quota. A full bar is a healthy
+//! balance. Providers with nothing to show are omitted.
 
 use serde::{Deserialize, Serialize};
 
 use crate::model::ProviderSnapshot;
 
-/// What the menu-bar title prefers when a provider has both a quota and tokens.
+/// How the menu bar presents quota.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TitleMode {
-    /// Quota already used, for example `C 62%`.
+    /// Block meter of remaining percent. A full bar means balance left.
     #[default]
-    UsedPercent,
-    /// Quota still left, for example `C 38%`.
-    RemainingPercent,
-    /// Billable token total only.
-    Tokens,
+    BalanceBars,
+    /// Remaining percent as text, for example `C 38%`.
+    PercentText,
+    /// No title text. The tray icon carries the meter.
+    IconOnly,
 }
 
 pub fn now_rfc3339() -> String {
@@ -60,6 +61,22 @@ pub fn format_percent(pct: f64) -> String {
     }
 }
 
+pub fn remaining_percent(used_percent: f64) -> f64 {
+    (100.0 - used_percent).clamp(0.0, 100.0)
+}
+
+/// `█` is remaining balance. `░` is the part already spent.
+pub fn block_meter(remaining: f64, cells: usize) -> String {
+    let cells = cells.max(1);
+    let filled = ((remaining.clamp(0.0, 100.0) / 100.0) * cells as f64).round() as usize;
+    let filled = filled.min(cells);
+    let mut bar = String::with_capacity(cells * 3);
+    for index in 0..cells {
+        bar.push(if index < filled { '█' } else { '░' });
+    }
+    bar
+}
+
 pub fn format_meter(
     prefix: &str,
     used_percent: Option<f64>,
@@ -67,18 +84,14 @@ pub fn format_meter(
     mode: TitleMode,
 ) -> Option<String> {
     match mode {
-        TitleMode::Tokens => tokens.map(|count| format!("{prefix} {}", format_compact(count))),
-        TitleMode::RemainingPercent => {
+        TitleMode::IconOnly => None,
+        TitleMode::PercentText => percent_label(prefix, used_percent, tokens),
+        TitleMode::BalanceBars => {
+            // Cell count is chosen in `tray_title`, where we know how many
+            // providers are visible. A lone call uses the short bar.
             if let Some(used) = used_percent {
-                let remaining = (100.0 - used).clamp(0.0, 100.0);
-                Some(format!("{prefix} {}%", format_percent(remaining)))
-            } else {
-                tokens.map(|count| format!("{prefix} {}", format_compact(count)))
-            }
-        }
-        TitleMode::UsedPercent => {
-            if let Some(used) = used_percent {
-                Some(format!("{prefix} {}%", format_percent(used)))
+                let bar = block_meter(remaining_percent(used), 4);
+                Some(format!("{prefix} {bar}"))
             } else {
                 tokens.map(|count| format!("{prefix} {}", format_compact(count)))
             }
@@ -86,15 +99,70 @@ pub fn format_meter(
     }
 }
 
+fn percent_label(prefix: &str, used_percent: Option<f64>, tokens: Option<u64>) -> Option<String> {
+    if let Some(used) = used_percent {
+        Some(format!(
+            "{prefix} {}%",
+            format_percent(remaining_percent(used))
+        ))
+    } else {
+        tokens.map(|count| format!("{prefix} {}", format_compact(count)))
+    }
+}
+
 pub fn tray_title(providers: &[ProviderSnapshot], mode: TitleMode) -> String {
-    let parts: Vec<String> = providers
+    if mode == TitleMode::IconOnly {
+        return String::new();
+    }
+    let visible: Vec<&ProviderSnapshot> = providers
         .iter()
-        .filter_map(|provider| provider.menu_label(mode))
+        .filter(|provider| provider.used_percent.is_some() || provider.tokens.is_some())
+        .collect();
+    if visible.is_empty() {
+        return "TokenBar".to_string();
+    }
+    if mode == TitleMode::PercentText {
+        let parts: Vec<String> = visible
+            .iter()
+            .filter_map(|provider| {
+                percent_label(&provider.prefix, provider.used_percent, provider.tokens)
+            })
+            .collect();
+        return parts.join(" · ");
+    }
+    let quota_count = visible
+        .iter()
+        .filter(|provider| provider.used_percent.is_some())
+        .count();
+    let cells = if quota_count <= 1 { 8 } else { 4 };
+    let parts: Vec<String> = visible
+        .iter()
+        .filter_map(|provider| balance_part(provider, cells, quota_count == 1))
         .collect();
     if parts.is_empty() {
         "TokenBar".to_string()
     } else {
         parts.join(" · ")
+    }
+}
+
+fn balance_part(provider: &ProviderSnapshot, cells: usize, show_number: bool) -> Option<String> {
+    if let Some(used) = provider.used_percent {
+        let remaining = remaining_percent(used);
+        let bar = block_meter(remaining, cells);
+        if show_number {
+            Some(format!(
+                "{} {bar} {}",
+                provider.prefix,
+                format_percent(remaining)
+            ))
+        } else {
+            Some(format!("{} {bar}", provider.prefix))
+        }
+    } else {
+        provider
+            .tokens
+            .map(|count| format!("{} {}", provider.prefix, format_compact(count)))
     }
 }
 
@@ -176,19 +244,27 @@ mod tests {
     }
 
     #[test]
-    fn meter_hides_empty_and_spaces_parts() {
+    fn balance_bar_fills_with_remaining() {
+        assert_eq!(block_meter(100.0, 4), "████");
+        assert_eq!(block_meter(0.0, 4), "░░░░");
+        assert_eq!(block_meter(58.0, 4), "██░░");
+        assert_eq!(block_meter(28.0, 8), "██░░░░░░");
+    }
+
+    #[test]
+    fn meter_hides_empty_providers() {
         assert_eq!(
-            format_meter("R", Some(42.0), Some(99), TitleMode::UsedPercent).as_deref(),
-            Some("R 42%")
-        );
-        assert_eq!(
-            format_meter("O", None, Some(1_200), TitleMode::UsedPercent).as_deref(),
+            format_meter("O", None, Some(1_200), TitleMode::PercentText).as_deref(),
             Some("O 1.2k")
         );
-        assert_eq!(format_meter("C", None, None, TitleMode::UsedPercent), None);
+        assert_eq!(format_meter("C", None, None, TitleMode::PercentText), None);
         assert_eq!(
-            format_meter("C", Some(72.0), None, TitleMode::RemainingPercent).as_deref(),
+            format_meter("C", Some(72.0), None, TitleMode::PercentText).as_deref(),
             Some("C 28%")
+        );
+        assert_eq!(
+            format_meter("C", Some(72.0), None, TitleMode::BalanceBars).as_deref(),
+            Some("C █░░░")
         );
     }
 
