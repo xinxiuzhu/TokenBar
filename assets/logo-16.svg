@@ -1,15 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 16 16" fill="none" role="img" aria-label="TokenBar">
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 16 16" role="img" aria-label="TokenBar">
   <title>TokenBar</title>
-  <!-- 16px tray silhouette. Rasterized at 32px and shown at 16pt. Alpha is the tint. -->
-  <circle cx="8" cy="8" r="6.15" stroke="#000" stroke-opacity="0.32" stroke-width="2.05"/>
-  <circle
-    cx="8"
-    cy="8"
-    r="6.15"
-    stroke="#000"
-    stroke-width="2.05"
-    stroke-linecap="round"
-    stroke-dasharray="29 38.64"
-    transform="rotate(-90 8 8)"/>
-  <rect x="5.65" y="5.65" width="4.7" height="4.7" rx="1.15" fill="#000"/>
+  <rect width="16" height="16" rx="3.5" fill="#0B1B3A"/>
+  <circle cx="8" cy="8" r="5.85" fill="none" stroke="#FFFFFF" stroke-width="2.6"/>
+  <rect x="1.1" y="6.7" width="13.8" height="2.6" fill="#F5C518"/>
 </svg>

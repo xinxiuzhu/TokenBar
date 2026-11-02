@@ -14,7 +14,7 @@ A percent means quota **used**. A compact number means tokens. Click the icon to
 
 The UI is [gpui-kit](https://github.com/longbridge/gpui-kit) plus [gpui-tray](https://github.com/domenkozar/gpui-tray) (`gpui-kit` feature). There is no Swift and no Liquid Glass shell. macOS builds are accessory apps (`LSUIElement`, no Dock icon). The panel copy is Chinese; the tray title stays the compact `R` / `C` / `O` string.
 
-The mark is a usage ring around a token chip, not a bar chart. `assets/logo.svg` is the color logo used in the panel header. `assets/logo-16.svg` is the 16px tray silhouette (drawn on a 16-unit grid, rasterized at 32px for a 16pt menu-bar icon).
+The mark is a large white ring with a thick yellow bar through the middle, on a deep navy rounded square. Flat colors only: navy `#0B1B3A`, white, yellow `#F5C518`. `assets/logo.svg` is the panel header. `assets/logo-16.svg` is the same mark on a 16-unit grid, rasterized at 32px for a 16pt tray icon. `assets/logo-mono.svg` is the white ring and bar with no background.
 
 TokenBar is **Apache-2.0**. See `LICENSE` and `NOTICE`. Provider ideas are reimplemented from the MIT-licensed [Syrtis](https://github.com/Nanako0129/syrtis) project; that source is not copied.
 
@@ -141,7 +141,7 @@ Usage calls go only to Cursor, Anthropic, and OpenAI, using a credential you alr
 
 界面使用 [gpui-kit](https://github.com/longbridge/gpui-kit) 和 [gpui-tray](https://github.com/domenkozar/gpui-tray)（`gpui-kit` feature）。没有 Swift，也没有 Liquid Glass。macOS 以附件应用运行（`LSUIElement`，不出现在程序坞）。
 
-标志是一圈用量环，中间是一枚 token 芯片，不是柱状图。`assets/logo.svg` 是面板顶栏用的彩色标志。`assets/logo-16.svg` 是 16px 托盘剪影（16 单位网格，按 32px 栅格化后以 16pt 显示在菜单栏）。
+标志是深蓝圆角方块上的一圈粗白环，正中穿过一条黄色横条。只用三色：海军蓝 `#0B1B3A`、白、黄 `#F5C518`。`assets/logo.svg` 用于面板顶栏。`assets/logo-16.svg` 是同一图形的 16 单位网格，按 32px 栅格化后以 16pt 放在托盘。`assets/logo-mono.svg` 是无底色的白环加白条。
 
 本项目许可证是 **Apache-2.0**，见 `LICENSE` 与 `NOTICE`。用量读取的思路来自 MIT 许可的 [Syrtis](https://github.com/Nanako0129/syrtis)，实现是重写的，没有复制其源码。
 

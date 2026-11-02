@@ -163,9 +163,8 @@ fn logo_mark() -> impl IntoElement {
         .with_fallback(|| {
             div()
                 .size(px(22.))
-                .rounded_full()
-                .border_2()
-                .border_color(rgb(ACCENT))
+                .rounded(px(5.))
+                .bg(rgb(0x0b1b3a))
                 .into_any_element()
         })
 }
@@ -745,8 +744,9 @@ fn start_refresh_loop(cx: &mut App) {
 fn tray_icon(cx: &App) -> gpui_tray::Result<Icon> {
     let image = Image::from_bytes(ImageFormat::Svg, TRAY_SVG.to_vec());
     let builder = Icon::from_gpui(&image, cx);
+    // Keep the navy / white / yellow mark. A template icon would flatten it.
     #[cfg(target_os = "macos")]
-    let builder = builder.template(true).scale_factor(2.0);
+    let builder = builder.template(false).scale_factor(2.0);
     match builder.build() {
         Ok(icon) => Ok(icon),
         Err(err) => {
@@ -762,29 +762,39 @@ fn ring_fallback() -> gpui_tray::Result<Icon> {
     let center = (SIZE as f32 - 1.0) / 2.0;
     for y in 0..SIZE {
         for x in 0..SIZE {
-            let dx = x as f32 - center;
-            let dy = y as f32 - center;
-            let distance = dx.hypot(dy);
-            let offset = ((y * SIZE + x) * 4) as usize;
-            let mut alpha = 0u8;
-            if (9.2..13.4).contains(&distance) {
-                let angle = dy.atan2(dx);
-                let mut from_top = angle + std::f32::consts::FRAC_PI_2;
-                if from_top < 0.0 {
-                    from_top += std::f32::consts::TAU;
-                }
-                alpha = if from_top < 4.7 { 255 } else { 80 };
-            } else if dx.abs() <= 4.6 && dy.abs() <= 4.6 {
-                alpha = 255;
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
+            if !in_rounded_square(px, py, SIZE as f32, 7.0) {
+                continue;
             }
-            rgba[offset] = 0;
-            rgba[offset + 1] = 0;
-            rgba[offset + 2] = 0;
-            rgba[offset + 3] = alpha;
+            let dx = px - center;
+            let dy = py - center;
+            let on_ring = (dx.hypot(dy) - 11.6).abs() <= 2.6;
+            let on_bar = (2.2..29.8).contains(&px) && (13.4..18.6).contains(&py);
+            let (red, green, blue) = if on_bar {
+                (0xF5, 0xC5, 0x18)
+            } else if on_ring {
+                (0xFF, 0xFF, 0xFF)
+            } else {
+                (0x0B, 0x1B, 0x3A)
+            };
+            let offset = ((y * SIZE + x) * 4) as usize;
+            rgba[offset] = red;
+            rgba[offset + 1] = green;
+            rgba[offset + 2] = blue;
+            rgba[offset + 3] = 255;
         }
     }
     let builder = Icon::from_rgba(rgba, SIZE, SIZE);
     #[cfg(target_os = "macos")]
-    let builder = builder.template(true).scale_factor(2.0);
+    let builder = builder.template(false).scale_factor(2.0);
     builder.build()
+}
+
+fn in_rounded_square(x: f32, y: f32, size: f32, radius: f32) -> bool {
+    let cx = x.clamp(radius, size - radius);
+    let cy = y.clamp(radius, size - radius);
+    let dx = x - cx;
+    let dy = y - cy;
+    dx * dx + dy * dy <= radius * radius
 }
