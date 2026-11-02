@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" role="img" aria-label="TokenBar">
+  <title>TokenBar</title>
+  <!-- Usage ring around a token chip. Not a bar chart. -->
+  <circle cx="16" cy="16" r="11.5" stroke="#C9CDD6" stroke-width="3.2"/>
+  <circle
+    cx="16"
+    cy="16"
+    r="11.5"
+    stroke="#3B6CFF"
+    stroke-width="3.2"
+    stroke-linecap="round"
+    stroke-dasharray="54.2 72.26"
+    transform="rotate(-90 16 16)"/>
+  <rect x="11.2" y="11.2" width="9.6" height="9.6" rx="2.5" fill="#F4F6FA"/>
+  <rect x="13.45" y="13.45" width="5.1" height="5.1" rx="1.15" fill="#3B6CFF"/>
+</svg>
