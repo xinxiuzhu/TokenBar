@@ -81,30 +81,24 @@ pub(crate) fn presence_of(store: &dyn SecretStore) -> SecretPresence {
 pub(crate) fn validate_secret(kind: SecretKind, raw: &str) -> Result<String, String> {
     let value = raw.trim();
     if value.is_empty() {
-        return Err("clipboard is empty".to_string());
+        return Err("剪贴板是空的".to_string());
     }
     if value.len() > 16 * 1024 {
-        return Err("clipboard value is too long".to_string());
+        return Err("内容太长".to_string());
     }
     if value
         .chars()
         .any(|ch| ch == '\n' || ch == '\r' || ch == '\0')
     {
-        return Err("paste a single-line token".to_string());
+        return Err("请粘贴单行凭据".to_string());
     }
     match kind {
-        SecretKind::CursorSession if value.len() < 8 => {
-            Err("Cursor session looks too short".to_string())
-        }
-        SecretKind::ClaudeOauth if value.len() < 20 => {
-            Err("Claude OAuth token looks too short".to_string())
-        }
+        SecretKind::CursorSession if value.len() < 8 => Err("Cursor 登录内容太短".to_string()),
+        SecretKind::ClaudeOauth if value.len() < 20 => Err("Claude 凭据太短".to_string()),
         SecretKind::OpenaiKey if !value.starts_with("sk-") => {
-            Err("OpenAI key should start with sk-".to_string())
+            Err("OpenAI 密钥格式不对".to_string())
         }
-        SecretKind::DeepseekKey if value.len() < 8 => {
-            Err("DeepSeek key looks too short".to_string())
-        }
+        SecretKind::DeepseekKey if value.len() < 8 => Err("DeepSeek 密钥太短".to_string()),
         _ => Ok(value.to_string()),
     }
 }

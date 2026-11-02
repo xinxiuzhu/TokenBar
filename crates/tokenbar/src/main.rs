@@ -3,6 +3,8 @@
 //! `tokenbar --check` prints a JSON snapshot and never opens a window, so it
 //! runs on headless CI. The tray UI starts only when no subcommand is given.
 
+#[cfg(target_os = "macos")]
+mod status_click;
 mod ui;
 
 const HELP: &str = "\
@@ -22,9 +24,11 @@ ENVIRONMENT:
     CLAUDE_CONFIG_DIR        Claude Code config directory (default ~/.claude)
     CODEX_HOME               Codex home (default ~/.codex)
 
-The tray title is a remaining-balance bar, like R ██░░ · C █░░░. A full bar
-means quota left. Providers with no data are hidden. Cursor is R so it does
-not share C with Claude.
+The menu bar shows remaining quota as a thin meter, like C ━━────── 28.
+A full meter means quota left. A token total is shown only when that
+provider has no plan percent. `tokenbar --check` still prints the stub
+title R ██░░ · C █░░░ · O 1.2k when TOKENBAR_OFFLINE=1. Cursor is R so it
+does not share C with Claude.
 
 On macOS, tokens you paste are stored in the login keychain. Other platforms
 use a mode 0600 file under the config directory. See README.md.

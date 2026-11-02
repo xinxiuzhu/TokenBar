@@ -33,8 +33,11 @@ gpui-tray = { version = "=0.3.0", default-features = false, features = ["gpui-ki
 tokenbar-core = { path = "../tokenbar-core" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+async-channel = "2"
+block2 = "0.6"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSRunningApplication"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSObject", "NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSRunningApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSScreen", "NSView", "NSWindow", "block2"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"

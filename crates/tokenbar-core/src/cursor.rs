@@ -304,20 +304,77 @@ fn apply_summary(snapshot: &mut ProviderSnapshot, summary: &Value) {
     {
         snapshot.plan = Some(plan.to_string());
     }
-    if let Some(percent) = summary_percent(summary) {
-        snapshot.used_percent = Some(percent);
-        snapshot.windows.push(UsageWindow {
-            name: "plan".to_string(),
-            used_percent: Some(percent),
-            resets_at: summary.get("billingCycleEnd").and_then(reset_string),
-        });
-        snapshot.resets_at = snapshot
-            .windows
-            .first()
-            .and_then(|window| window.resets_at.clone());
+    let reset = summary.get("billingCycleEnd").and_then(reset_string);
+    let plan_body = summary
+        .pointer("/individualUsage/plan")
+        .or_else(|| summary.get("plan"));
+    if let Some(plan_body) = plan_body {
+        if let Some(percent) = plan_body
+            .get("totalPercentUsed")
+            .and_then(Value::as_f64)
+            .or_else(|| used_over_limit(plan_body))
+        {
+            push_plan_window(snapshot, "套餐", percent, reset.clone());
+        }
+        if let Some(percent) = plan_body.get("apiPercentUsed").and_then(Value::as_f64) {
+            push_plan_window(snapshot, "API", percent, reset.clone());
+        }
+        if let Some(percent) = plan_body.get("autoPercentUsed").and_then(Value::as_f64) {
+            push_plan_window(snapshot, "Auto", percent, reset.clone());
+        }
+    }
+    if snapshot.windows.is_empty() {
+        if let Some(percent) = summary_percent(summary) {
+            push_plan_window(snapshot, "套餐", percent, reset);
+        }
+    }
+    if let Some(first) = snapshot.windows.first() {
+        snapshot.used_percent = first.used_percent;
+        snapshot.resets_at = first.resets_at.clone();
         push_source(snapshot, "usage-summary");
         snapshot.error = None;
     }
+}
+
+fn used_over_limit(plan: &Value) -> Option<f64> {
+    let used = plan.get("used").and_then(Value::as_f64)?;
+    let limit = plan.get("limit").and_then(Value::as_f64)?;
+    if limit > 0.0 {
+        Some(used / limit * 100.0)
+    } else {
+        None
+    }
+}
+
+fn push_plan_window(
+    snapshot: &mut ProviderSnapshot,
+    name: &str,
+    percent: f64,
+    reset: Option<String>,
+) {
+    if snapshot.windows.iter().any(|window| {
+        window.name == name
+            || window
+                .used_percent
+                .is_some_and(|used| (used - percent).abs() < 1.0 && window.name != "套餐")
+    }) {
+        return;
+    }
+    if name != "套餐"
+        && snapshot.windows.iter().any(|window| {
+            window.name == "套餐"
+                && window
+                    .used_percent
+                    .is_some_and(|used| (used - percent).abs() < 1.0)
+        })
+    {
+        return;
+    }
+    snapshot.windows.push(UsageWindow {
+        name: name.to_string(),
+        used_percent: Some(percent),
+        resets_at: reset,
+    });
 }
 
 fn summary_percent(summary: &Value) -> Option<f64> {
