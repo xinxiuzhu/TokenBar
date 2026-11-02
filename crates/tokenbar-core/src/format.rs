@@ -116,7 +116,11 @@ pub fn tray_title(providers: &[ProviderSnapshot], mode: TitleMode) -> String {
     }
     let visible: Vec<&ProviderSnapshot> = providers
         .iter()
-        .filter(|provider| provider.used_percent.is_some() || provider.tokens.is_some())
+        .filter(|provider| {
+            provider.used_percent.is_some()
+                || provider.tokens.is_some()
+                || provider.balance.is_some()
+        })
         .collect();
     if visible.is_empty() {
         return "TokenBar".to_string();
@@ -125,7 +129,14 @@ pub fn tray_title(providers: &[ProviderSnapshot], mode: TitleMode) -> String {
         let parts: Vec<String> = visible
             .iter()
             .filter_map(|provider| {
-                percent_label(&provider.prefix, provider.used_percent, provider.tokens)
+                percent_label(&provider.prefix, provider.used_percent, provider.tokens).or_else(
+                    || {
+                        provider
+                            .balance
+                            .as_ref()
+                            .map(|balance| format!("{} {balance}", provider.prefix))
+                    },
+                )
             })
             .collect();
         return parts.join(" · ");
@@ -159,6 +170,8 @@ fn balance_part(provider: &ProviderSnapshot, cells: usize, show_number: bool) ->
         } else {
             Some(format!("{} {bar}", provider.prefix))
         }
+    } else if let Some(balance) = &provider.balance {
+        Some(format!("{} {balance}", provider.prefix))
     } else {
         provider
             .tokens

@@ -1,8 +1,8 @@
 # TokenBar
 
-菜单栏里看 Cursor、Claude 和 OpenAI 的用量。托盘默认是余额条（满条表示剩余多），没有数据的服务不显示。
+菜单栏里看 Claude、OpenAI、OpenCode、DeepSeek 和 Cursor 的用量。托盘默认是余额条（满条表示剩余多），没有数据的服务不显示。
 
-Menu-bar usage for Cursor, Claude, and OpenAI.
+Menu-bar usage for Claude, OpenAI, OpenCode, DeepSeek, and Cursor.
 
 ## 构建与运行
 
