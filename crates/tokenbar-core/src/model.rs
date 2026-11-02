@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::format::{format_meter, tray_title};
+use crate::format::{tray_title, TitleMode};
 
 /// Which product a row describes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -53,8 +53,12 @@ pub struct ProviderSnapshot {
     pub prefix: String,
     /// Quota used, on a 0–100 scale, when the provider reports one.
     pub used_percent: Option<f64>,
-    /// Token total when the provider has no quota percent, or a supplementary count.
+    /// `100 - used_percent` when a plan window exists.
+    pub remaining_percent: Option<f64>,
+    /// Billable tokens. Cache reads are not included.
     pub tokens: Option<u64>,
+    /// Cache-read tokens, kept off the headline.
+    pub cache_read_tokens: Option<u64>,
     pub plan: Option<String>,
     pub resets_at: Option<String>,
     /// Short source tag such as `usage-summary+events` or `missing`.
@@ -71,7 +75,9 @@ impl ProviderSnapshot {
             label: id.label().to_string(),
             prefix: id.prefix().to_string(),
             used_percent: None,
+            remaining_percent: None,
             tokens: None,
+            cache_read_tokens: None,
             plan: None,
             resets_at: None,
             source: "missing".to_string(),
@@ -81,8 +87,15 @@ impl ProviderSnapshot {
         }
     }
 
-    pub fn meter(&self) -> String {
-        format_meter(&self.prefix, self.used_percent, self.tokens)
+    pub fn menu_label(&self, mode: TitleMode) -> Option<String> {
+        crate::format::format_meter(&self.prefix, self.used_percent, self.tokens, mode)
+    }
+
+    pub(crate) fn with_derived(mut self) -> Self {
+        self.remaining_percent = self
+            .used_percent
+            .map(|used| (100.0 - used).clamp(0.0, 100.0));
+        self
     }
 }
 
@@ -97,7 +110,11 @@ pub struct UsageSnapshot {
 
 impl UsageSnapshot {
     pub fn from_providers(offline: bool, providers: Vec<ProviderSnapshot>) -> Self {
-        let title = tray_title(&providers);
+        let providers: Vec<ProviderSnapshot> = providers
+            .into_iter()
+            .map(ProviderSnapshot::with_derived)
+            .collect();
+        let title = tray_title(&providers, TitleMode::UsedPercent);
         Self {
             generated_at: crate::format::now_rfc3339(),
             offline,

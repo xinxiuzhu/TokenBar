@@ -1,9 +1,24 @@
 //! Tray title formatting.
 //!
-//! A percent is preferred when the provider reports quota used. Otherwise the
-//! meter falls back to a compact token count: `R42% C72% O1.2k`.
+//! Providers with no quota and no tokens are omitted. The default reads
+//! `R 42% · C 72% · O 1.2k`.
+
+use serde::{Deserialize, Serialize};
 
 use crate::model::ProviderSnapshot;
+
+/// What the menu-bar title prefers when a provider has both a quota and tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleMode {
+    /// Quota already used, for example `C 62%`.
+    #[default]
+    UsedPercent,
+    /// Quota still left, for example `C 38%`.
+    RemainingPercent,
+    /// Billable token total only.
+    Tokens,
+}
 
 pub fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
@@ -45,22 +60,63 @@ pub fn format_percent(pct: f64) -> String {
     }
 }
 
-pub fn format_meter(prefix: &str, used_percent: Option<f64>, tokens: Option<u64>) -> String {
-    if let Some(pct) = used_percent {
-        format!("{prefix}{}%", format_percent(pct))
-    } else if let Some(tokens) = tokens {
-        format!("{prefix}{}", format_compact(tokens))
-    } else {
-        format!("{prefix}--")
+pub fn format_meter(
+    prefix: &str,
+    used_percent: Option<f64>,
+    tokens: Option<u64>,
+    mode: TitleMode,
+) -> Option<String> {
+    match mode {
+        TitleMode::Tokens => tokens.map(|count| format!("{prefix} {}", format_compact(count))),
+        TitleMode::RemainingPercent => {
+            if let Some(used) = used_percent {
+                let remaining = (100.0 - used).clamp(0.0, 100.0);
+                Some(format!("{prefix} {}%", format_percent(remaining)))
+            } else {
+                tokens.map(|count| format!("{prefix} {}", format_compact(count)))
+            }
+        }
+        TitleMode::UsedPercent => {
+            if let Some(used) = used_percent {
+                Some(format!("{prefix} {}%", format_percent(used)))
+            } else {
+                tokens.map(|count| format!("{prefix} {}", format_compact(count)))
+            }
+        }
     }
 }
 
-pub fn tray_title(providers: &[ProviderSnapshot]) -> String {
-    providers
+pub fn tray_title(providers: &[ProviderSnapshot], mode: TitleMode) -> String {
+    let parts: Vec<String> = providers
         .iter()
-        .map(ProviderSnapshot::meter)
-        .collect::<Vec<_>>()
-        .join(" ")
+        .filter_map(|provider| provider.menu_label(mode))
+        .collect();
+    if parts.is_empty() {
+        "TokenBar".to_string()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+/// Short Chinese reset countdown for a provider row.
+pub fn reset_hint(resets_at: &str) -> String {
+    let Ok(when) = chrono::DateTime::parse_from_rfc3339(resets_at) else {
+        return String::new();
+    };
+    let secs = when
+        .with_timezone(&chrono::Utc)
+        .signed_duration_since(chrono::Utc::now())
+        .num_seconds();
+    if secs <= 0 {
+        return "已重置".to_string();
+    }
+    if secs < 90 * 60 {
+        return format!("{} 分钟后重置", (secs / 60).max(1));
+    }
+    if secs < 48 * 3600 {
+        return format!("{} 小时后重置", (secs / 3600).max(1));
+    }
+    format!("重置 {}", resets_at.get(5..16).unwrap_or(resets_at))
 }
 
 /// `TOKENBAR_OFFLINE=1` selects the stub snapshot. Other values do not.
@@ -120,10 +176,20 @@ mod tests {
     }
 
     #[test]
-    fn meter_prefers_percent() {
-        assert_eq!(format_meter("R", Some(42.0), Some(99)), "R42%");
-        assert_eq!(format_meter("O", None, Some(1_200)), "O1.2k");
-        assert_eq!(format_meter("C", None, None), "C--");
+    fn meter_hides_empty_and_spaces_parts() {
+        assert_eq!(
+            format_meter("R", Some(42.0), Some(99), TitleMode::UsedPercent).as_deref(),
+            Some("R 42%")
+        );
+        assert_eq!(
+            format_meter("O", None, Some(1_200), TitleMode::UsedPercent).as_deref(),
+            Some("O 1.2k")
+        );
+        assert_eq!(format_meter("C", None, None, TitleMode::UsedPercent), None);
+        assert_eq!(
+            format_meter("C", Some(72.0), None, TitleMode::RemainingPercent).as_deref(),
+            Some("C 28%")
+        );
     }
 
     #[test]

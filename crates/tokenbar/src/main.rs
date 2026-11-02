@@ -16,15 +16,14 @@ USAGE:
 
 ENVIRONMENT:
     TOKENBAR_OFFLINE=1       Skip the network and local credentials; emit the
-                             stub title R42% C72% O1.2k
+                             stub title R 42% · C 72% · O 1.2k
     TOKENBAR_SECRETS_PATH    Force the 0600 JSON secret file (any OS)
     CURSOR_SESSION_TOKEN     Override the Cursor session cookie
     CLAUDE_CONFIG_DIR        Claude Code config directory (default ~/.claude)
     CODEX_HOME               Codex home (default ~/.codex)
 
-The tray title looks like R42% C72% O1.2k. Cursor is R (the R in CuRsor) so
-it does not share C with Claude. A percent is quota used; a compact number
-is a token total.
+The tray title looks like R 42% · C 72% · O 1.2k. Providers with no data are
+hidden. Cursor is R so it does not share C with Claude.
 
 On macOS, tokens you paste are stored in the login keychain. Other platforms
 use a mode 0600 file under the config directory. See README.md.

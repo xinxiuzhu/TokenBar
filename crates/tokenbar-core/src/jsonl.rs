@@ -15,12 +15,20 @@ const MAX_DEPTH: usize = 10;
 const MAX_BYTES_PER_FILE: usize = 32 * 1024 * 1024;
 const MAX_LINE: usize = 1_000_000;
 
-pub(crate) fn sum_claude_tree(root: &Path) -> u64 {
-    let mut total = 0u64;
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TokenSplit {
+    pub billable: u64,
+    pub cache_read: u64,
+}
+
+pub(crate) fn sum_claude_tree(root: &Path) -> TokenSplit {
+    let mut split = TokenSplit::default();
     for_jsonl(root, |line| {
-        total = total.saturating_add(claude_line_tokens(line));
+        let line_split = claude_line_split(line);
+        split.billable = split.billable.saturating_add(line_split.billable);
+        split.cache_read = split.cache_read.saturating_add(line_split.cache_read);
     });
-    total
+    split
 }
 
 pub(crate) fn sum_codex_trees(roots: &[PathBuf]) -> u64 {
@@ -37,19 +45,29 @@ fn sum_codex_tree(root: &Path) -> u64 {
     files.iter().map(|path| codex_file_tokens(path)).sum()
 }
 
-pub(crate) fn claude_line_tokens(line: &str) -> u64 {
+pub(crate) fn claude_line_split(line: &str) -> TokenSplit {
     let Ok(value) = serde_json::from_str::<Value>(line) else {
-        return 0;
+        return TokenSplit::default();
     };
     if let Some(kind) = value.get("type").and_then(Value::as_str) {
         if kind != "assistant" {
-            return 0;
+            return TokenSplit::default();
         }
     }
-    let usage = value
+    let Some(usage) = value
         .pointer("/message/usage")
-        .or_else(|| value.get("usage"));
-    usage.map(sum_known_token_fields).unwrap_or(0)
+        .or_else(|| value.get("usage"))
+    else {
+        return TokenSplit::default();
+    };
+    let billable = json_u64(usage, &["input_tokens"])
+        .saturating_add(json_u64(usage, &["output_tokens"]))
+        .saturating_add(json_u64(usage, &["cache_creation_input_tokens"]))
+        .saturating_add(json_u64(usage, &["cache_write_input_tokens"]));
+    TokenSplit {
+        billable,
+        cache_read: json_u64(usage, &["cache_read_input_tokens"]),
+    }
 }
 
 pub(crate) fn codex_text_tokens(text: &str) -> u64 {
@@ -108,22 +126,13 @@ fn token_count_info(value: &Value) -> Option<&Value> {
 
 fn usage_block_tokens(block: &Value) -> u64 {
     let input = json_u64(block, &["input_tokens", "inputTokens"]);
+    let cached = json_u64(block, &["cached_input_tokens", "cachedInputTokens"]);
     let output = json_u64(block, &["output_tokens", "outputTokens"]);
     let reasoning = json_u64(block, &["reasoning_output_tokens", "reasoningOutputTokens"]);
-    input.saturating_add(output).saturating_add(reasoning)
-}
-
-fn sum_known_token_fields(usage: &Value) -> u64 {
-    const KEYS: &[&str] = &[
-        "input_tokens",
-        "output_tokens",
-        "cache_read_input_tokens",
-        "cache_creation_input_tokens",
-        "cache_write_input_tokens",
-    ];
-    KEYS.iter()
-        .map(|key| json_u64(usage, &[key]))
-        .fold(0u64, u64::saturating_add)
+    input
+        .saturating_sub(cached)
+        .saturating_add(output)
+        .saturating_add(reasoning)
 }
 
 pub(crate) fn json_u64(value: &Value, keys: &[&str]) -> u64 {
@@ -230,9 +239,15 @@ mod tests {
     #[test]
     fn claude_assistant_usage_is_summed() {
         let line = r#"{"type":"assistant","message":{"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":2}}}"#;
-        assert_eq!(claude_line_tokens(line), 17);
+        assert_eq!(
+            claude_line_split(line),
+            TokenSplit {
+                billable: 15,
+                cache_read: 2
+            }
+        );
         let skipped = r#"{"type":"user","message":{"usage":{"input_tokens":99}}}"#;
-        assert_eq!(claude_line_tokens(skipped), 0);
+        assert_eq!(claude_line_split(skipped), TokenSplit::default());
     }
 
     #[test]
@@ -242,6 +257,12 @@ mod tests {
 {"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":0,"output_tokens":0}}}}
 "#;
         assert_eq!(codex_text_tokens(text), 1_200);
+    }
+
+    #[test]
+    fn codex_headline_excludes_cached_input() {
+        let text = r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":50}}}}"#;
+        assert_eq!(codex_text_tokens(text), 250);
     }
 
     #[test]
