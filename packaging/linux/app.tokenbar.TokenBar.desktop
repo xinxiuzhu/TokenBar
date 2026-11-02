@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=TokenBar
+Comment=菜单栏用量
+Exec=tokenbar
+Icon=tokenbar
+Terminal=false
+Categories=Utility;

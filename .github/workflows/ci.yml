@@ -36,6 +36,9 @@ jobs:
       - name: Package script syntax
         if: runner.os == 'Linux'
         run: bash -n packaging/macos/package.sh
+      - name: Verify app icons
+        shell: bash
+        run: python3 packaging/icons/make-icons.py --verify
       - name: Linux build and offline check
         if: runner.os == 'Linux'
         run: |
