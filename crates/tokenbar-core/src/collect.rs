@@ -60,6 +60,8 @@ pub(crate) fn collect_live(
         crate::cursor::fetch(http, secrets, paths),
         crate::claude::fetch(http, secrets, paths),
         crate::openai::fetch(http, secrets, paths),
+        crate::opencode::fetch(paths),
+        crate::deepseek::fetch(http, secrets),
     ];
     UsageSnapshot::from_providers(false, providers)
 }

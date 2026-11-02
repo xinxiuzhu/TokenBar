@@ -67,13 +67,17 @@ impl Render for Panel {
                 shell.status.clone(),
                 shell.show_settings,
                 shell.saved,
-                shell
-                    .snapshot
-                    .providers
-                    .iter()
-                    .filter(|provider| shell.settings.shows(provider.id))
-                    .cloned()
-                    .collect::<Vec<_>>(),
+                {
+                    let mut rows: Vec<_> = shell
+                        .snapshot
+                        .providers
+                        .iter()
+                        .filter(|provider| shell.settings.shows(provider.id))
+                        .cloned()
+                        .collect();
+                    rows.sort_by_key(|provider| panel_rank(provider.id));
+                    rows
+                },
                 shell.expanded,
                 shell.settings.clone(),
             )
@@ -196,6 +200,26 @@ fn panel_logo() -> Arc<Image> {
         .clone()
 }
 
+fn panel_rank(id: ProviderId) -> u8 {
+    match id {
+        ProviderId::Claude => 0,
+        ProviderId::Openai => 1,
+        ProviderId::Opencode => 2,
+        ProviderId::Deepseek => 3,
+        ProviderId::Cursor => 4,
+    }
+}
+
+fn accent(id: ProviderId) -> u32 {
+    match id {
+        ProviderId::Claude => 0xcc785c,
+        ProviderId::Openai => 0x10a37f,
+        ProviderId::Opencode => 0x7c5cff,
+        ProviderId::Deepseek => 0x4d6bfe,
+        ProviderId::Cursor => 0xf5c518,
+    }
+}
+
 fn provider_card(
     provider: &ProviderSnapshot,
     expanded: bool,
@@ -204,66 +228,152 @@ fn provider_card(
     let face = face_for(provider);
     let id = provider.id;
     let value_color = if face.quiet_value { MUTED } else { TEXT };
+    let windows: Vec<_> = provider
+        .windows
+        .iter()
+        .filter(|window| window.used_percent.is_some())
+        .take(3)
+        .cloned()
+        .collect();
+    let models: Vec<_> = provider.models.iter().take(6).cloned().collect();
     div()
         .id(row_id(id))
         .cursor_pointer()
         .flex()
-        .flex_col()
-        .gap(px(3.))
-        .px(px(12.))
-        .py(px(9.))
         .rounded_lg()
         .bg(rgb(CARD))
         .border_1()
         .border_color(rgb(LINE))
+        .overflow_hidden()
+        .child(div().w(px(3.)).bg(rgb(accent(id))))
         .child(
             div()
+                .flex_grow_1()
                 .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(12.))
+                .flex_col()
+                .gap(px(6.))
+                .px(px(12.))
+                .py(px(10.))
                 .child(
                     div()
                         .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .flex_grow_1()
+                        .items_center()
+                        .justify_between()
                         .child(
                             div()
-                                .text_size(px(13.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(provider.label.clone()),
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(
+                                    div()
+                                        .text_size(px(13.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(provider.label.clone()),
+                                )
+                                .when_some(provider.plan.clone(), |row, plan| {
+                                    row.child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .text_color(rgb(accent(id)))
+                                            .child(plan),
+                                    )
+                                }),
                         )
                         .child(
+                            div()
+                                .text_size(if provider.balance.is_some() {
+                                    px(18.)
+                                } else {
+                                    px(13.)
+                                })
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(value_color))
+                                .whitespace_nowrap()
+                                .child(face.value.clone()),
+                        ),
+                )
+                .when(!windows.is_empty(), |card| {
+                    card.children(windows.iter().map(|window| {
+                        gauge(
+                            window_title(&window.name),
+                            window.used_percent.unwrap_or(0.0),
+                        )
+                    }))
+                })
+                .when(windows.is_empty(), |card| {
+                    card.when_some(face.bar, |inner, used| inner.child(usage_bar(used)))
+                })
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .line_height(px(15.))
+                        .text_color(rgb(MUTED))
+                        .whitespace_normal()
+                        .child(face.subtitle),
+                )
+                .when(expanded, |card| {
+                    card.when(!models.is_empty(), |inner| {
+                        inner.child(div().flex().flex_col().gap(px(2.)).children(
+                            models.iter().map(|model| {
+                                div()
+                                    .flex()
+                                    .justify_between()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(MUTED))
+                                    .child(model.name.clone())
+                                    .child(model_side(model))
+                            }),
+                        ))
+                    })
+                    .when(!face.technical.is_empty(), |inner| {
+                        inner.child(
                             div()
                                 .text_size(px(11.))
                                 .line_height(px(15.))
                                 .text_color(rgb(MUTED))
                                 .whitespace_normal()
-                                .child(face.subtitle),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_size(px(13.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(value_color))
-                        .whitespace_nowrap()
-                        .child(face.value),
-                ),
+                                .child(face.technical),
+                        )
+                    })
+                }),
         )
-        .when_some(face.bar, |card, used| card.child(usage_bar(used)))
-        .when(expanded && !face.technical.is_empty(), |card| {
-            card.child(
-                div()
-                    .text_size(px(11.))
-                    .line_height(px(15.))
-                    .text_color(rgb(MUTED))
-                    .whitespace_normal()
-                    .child(face.technical),
-            )
-        })
         .on_click(cx.listener(move |_this, _event, _window, cx| toggle_expanded(id, cx)))
+}
+
+fn gauge(label: impl Into<String>, used: f64) -> impl IntoElement {
+    let remaining = (100.0 - used).clamp(0.0, 100.0);
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .child(
+            div()
+                .flex()
+                .justify_between()
+                .text_size(px(11.))
+                .text_color(rgb(MUTED))
+                .child(label.into())
+                .child(format!("剩余 {}%", format_percent(remaining))),
+        )
+        .child(usage_bar(used))
+}
+
+fn window_title(name: &str) -> String {
+    match name {
+        "five_hour" => "5 小时".to_string(),
+        "seven_day" => "每周".to_string(),
+        "seven_day_opus" => "Opus 每周".to_string(),
+        "seven_day_sonnet" => "Sonnet 每周".to_string(),
+        "会话" | "每周" => name.to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn model_side(model: &tokenbar_core::ModelUsage) -> String {
+    match model.cost {
+        Some(cost) => format!("{}  ${cost:.2}", format_compact(model.tokens)),
+        None => format_compact(model.tokens),
+    }
 }
 
 fn footer(cx: &mut Context<Panel>) -> impl IntoElement {
@@ -399,6 +509,64 @@ fn settings_card(
                 settings.show_openai = !settings.show_openai;
             },
         ))
+        .child(toggle_row(
+            "show-opencode",
+            "OpenCode",
+            settings.show_opencode,
+            cx,
+            |settings| {
+                settings.show_opencode = !settings.show_opencode;
+            },
+        ))
+        .child(toggle_row(
+            "show-deepseek",
+            "DeepSeek",
+            settings.show_deepseek,
+            cx,
+            |settings| {
+                settings.show_deepseek = !settings.show_deepseek;
+            },
+        ))
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(rgb(MUTED))
+                .child("托盘优先"),
+        )
+        .child(
+            div()
+                .flex()
+                .gap(px(6.))
+                .flex_wrap()
+                .child(primary_button(
+                    "primary-auto",
+                    "自动",
+                    settings.primary.is_none(),
+                    None,
+                    cx,
+                ))
+                .child(primary_button(
+                    "primary-claude",
+                    "Claude",
+                    settings.primary == Some(ProviderId::Claude),
+                    Some(ProviderId::Claude),
+                    cx,
+                ))
+                .child(primary_button(
+                    "primary-openai",
+                    "OpenAI",
+                    settings.primary == Some(ProviderId::Openai),
+                    Some(ProviderId::Openai),
+                    cx,
+                ))
+                .child(primary_button(
+                    "primary-cursor",
+                    "Cursor",
+                    settings.primary == Some(ProviderId::Cursor),
+                    Some(ProviderId::Cursor),
+                    cx,
+                )),
+        )
         .child(
             div()
                 .text_size(px(11.))
@@ -495,6 +663,14 @@ fn settings_card(
             SecretKind::OpenaiKey,
             cx,
         ))
+        .child(secret_row(
+            "paste-deepseek",
+            "clear-deepseek",
+            "粘贴 DeepSeek 密钥",
+            saved.deepseek,
+            SecretKind::DeepseekKey,
+            cx,
+        ))
         .child(
             div()
                 .text_size(px(11.))
@@ -575,6 +751,18 @@ fn toggle_row(
         .on_click(cx.listener(move |_this, _event, _window, cx| {
             commit_settings(cx, &mutate);
         }))
+}
+
+fn primary_button(
+    id: &'static str,
+    label: &'static str,
+    selected: bool,
+    primary: Option<ProviderId>,
+    cx: &mut Context<Panel>,
+) -> impl IntoElement {
+    choice(id, label, selected, cx, move |settings| {
+        settings.primary = primary;
+    })
 }
 
 fn mode_button(
@@ -717,8 +905,13 @@ fn face_for(provider: &ProviderSnapshot) -> RowFace {
         if let Some(tokens) = provider.tokens {
             bits.push(format!("日志 {}", format_compact(tokens)));
         }
+    } else if provider.balance.is_some() {
+        bits.push("预付余额".to_string());
     } else {
         bits.push("可计费，不含缓存读".to_string());
+    }
+    if let Some(cost) = provider.cost {
+        bits.push(format!("${cost:.2}"));
     }
     RowFace {
         value: panel_value(provider),
@@ -743,10 +936,20 @@ fn empty_copy(id: ProviderId) -> (String, String) {
             "暂无".to_string(),
             "登录 Codex，或在设置里粘贴 sk- 密钥".to_string(),
         ),
+        ProviderId::Opencode => ("暂无".to_string(), "本地没有 OpenCode 会话记录".to_string()),
+        ProviderId::Deepseek => (
+            "未连接".to_string(),
+            "在设置里粘贴 DeepSeek 密钥".to_string(),
+        ),
     }
 }
 
 fn panel_value(provider: &ProviderSnapshot) -> String {
+    if provider.used_percent.is_none() {
+        if let Some(balance) = &provider.balance {
+            return balance.clone();
+        }
+    }
     if let Some(used) = provider.used_percent {
         format!("{}%", format_percent(used))
     } else if let Some(tokens) = provider.tokens {
@@ -815,6 +1018,8 @@ fn row_id(id: ProviderId) -> &'static str {
         ProviderId::Cursor => "row-cursor",
         ProviderId::Claude => "row-claude",
         ProviderId::Openai => "row-openai",
+        ProviderId::Opencode => "row-opencode",
+        ProviderId::Deepseek => "row-deepseek",
     }
 }
 
@@ -823,6 +1028,7 @@ fn kind_name(kind: SecretKind) -> &'static str {
         SecretKind::CursorSession => "Cursor 会话",
         SecretKind::ClaudeOauth => "Claude OAuth",
         SecretKind::OpenaiKey => "OpenAI 密钥",
+        SecretKind::DeepseekKey => "DeepSeek 密钥",
     }
 }
 

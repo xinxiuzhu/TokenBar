@@ -19,6 +19,13 @@ pub struct DisplaySettings {
     pub show_claude: bool,
     #[serde(default = "yes")]
     pub show_openai: bool,
+    #[serde(default = "yes")]
+    pub show_opencode: bool,
+    #[serde(default = "yes")]
+    pub show_deepseek: bool,
+    /// When set, the tray shows only this provider.
+    #[serde(default)]
+    pub primary: Option<ProviderId>,
     #[serde(default)]
     pub title_mode: TitleMode,
     /// Seconds between refreshes. Clamped to 30 seconds through one day.
@@ -40,6 +47,9 @@ impl Default for DisplaySettings {
             show_cursor: true,
             show_claude: true,
             show_openai: true,
+            show_opencode: true,
+            show_deepseek: true,
+            primary: None,
             title_mode: TitleMode::BalanceBars,
             refresh_secs: 300,
         }
@@ -52,12 +62,9 @@ impl DisplaySettings {
             ProviderId::Cursor => self.show_cursor,
             ProviderId::Claude => self.show_claude,
             ProviderId::Openai => self.show_openai,
+            ProviderId::Opencode => self.show_opencode,
+            ProviderId::Deepseek => self.show_deepseek,
         }
-    }
-
-    pub fn normalized(mut self) -> Self {
-        self.refresh_secs = self.refresh_secs.clamp(30, 24 * 60 * 60);
-        self
     }
 
     pub fn menu_title(&self, providers: &[ProviderSnapshot]) -> String {
@@ -66,7 +73,24 @@ impl DisplaySettings {
             .filter(|provider| self.shows(provider.id))
             .cloned()
             .collect();
+        if let Some(primary) = self.primary {
+            if self.shows(primary) {
+                if let Some(one) = visible.iter().find(|provider| provider.id == primary) {
+                    if one.menu_label(self.title_mode).is_some() {
+                        return crate::format::tray_title(
+                            std::slice::from_ref(one),
+                            self.title_mode,
+                        );
+                    }
+                }
+            }
+        }
         crate::format::tray_title(&visible, self.title_mode)
+    }
+
+    pub fn normalized(mut self) -> Self {
+        self.refresh_secs = self.refresh_secs.clamp(30, 24 * 60 * 60);
+        self
     }
 }
 

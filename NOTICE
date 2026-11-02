@@ -17,6 +17,11 @@ that the MIT-licensed Syrtis menu-bar app documents and uses:
     "Claude Code-credentials" keychain item, and `/api/oauth/usage`
   - Codex `~/.codex/auth.json`, ChatGPT wham usage, and Codex JSONL rollouts
 
+Provider cards for OpenCode (`opencode.db`) and DeepSeek (`/user/balance`),
+plus session/weekly gauges, follow patterns from the MIT-licensed AI Usage
+app by Aitor Sola (https://github.com/aitorsola/AI-Usage). That Swift source
+is not included. The Rust implementation is original.
+
 That behavior is reimplemented in original Rust in `crates/tokenbar-core`.
 This repository does not contain Syrtis, tokscale-core, or tokcat source,
 and it does not copy non-MIT material from those trees.

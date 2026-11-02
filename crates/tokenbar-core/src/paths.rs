@@ -9,6 +9,7 @@ pub(crate) struct ProviderPaths {
     pub claude_projects: PathBuf,
     pub codex_auth: PathBuf,
     pub codex_session_roots: Vec<PathBuf>,
+    pub opencode_db: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -40,8 +41,27 @@ impl ProviderPaths {
             claude_projects: claude.join("projects"),
             codex_auth: codex.join("auth.json"),
             codex_session_roots: session_roots,
+            opencode_db: opencode_db(&roots.home),
         }
     }
+}
+
+fn opencode_db(home: &Path) -> PathBuf {
+    let local = home
+        .join(".local")
+        .join("share")
+        .join("opencode")
+        .join("opencode.db");
+    if local.exists() {
+        return local;
+    }
+    if let Some(data) = dirs::data_local_dir() {
+        let alt = data.join("opencode").join("opencode.db");
+        if alt.exists() {
+            return alt;
+        }
+    }
+    local
 }
 
 impl PathRoots {

@@ -59,6 +59,9 @@ pub(crate) fn fetch(
                 if snapshot.plan.is_none() {
                     snapshot.plan = wham.plan;
                 }
+                if snapshot.balance.is_none() {
+                    snapshot.balance = wham.balance;
+                }
                 sources.push("wham");
                 notes.push("codex oauth from auth.json".to_string());
             }
@@ -168,6 +171,7 @@ struct WhamUsage {
     resets_at: Option<String>,
     plan: Option<String>,
     windows: Vec<UsageWindow>,
+    balance: Option<String>,
 }
 
 fn fetch_wham(
@@ -209,10 +213,10 @@ fn parse_wham(response: HttpResponse) -> Result<WhamUsage, String> {
         .map(str::to_string);
     let rate = value.get("rate_limit").unwrap_or(&value);
     let mut windows = Vec::new();
-    if let Some(window) = rate_window("primary", rate.get("primary_window")) {
+    if let Some(window) = rate_window(rate.get("primary_window"), "会话") {
         windows.push(window);
     }
-    if let Some(window) = rate_window("secondary", rate.get("secondary_window")) {
+    if let Some(window) = rate_window(rate.get("secondary_window"), "每周") {
         windows.push(window);
     }
     if windows.is_empty() {
@@ -229,16 +233,42 @@ fn parse_wham(response: HttpResponse) -> Result<WhamUsage, String> {
     }
     let headline = windows.iter().find_map(|window| window.used_percent);
     let resets_at = windows.iter().find_map(|window| window.resets_at.clone());
+    let balance = credits_balance(rate).or_else(|| credits_balance(&value));
     Ok(WhamUsage {
         used_percent: headline,
         resets_at,
         plan,
         windows,
+        balance,
     })
 }
 
-fn rate_window(name: &str, value: Option<&Value>) -> Option<UsageWindow> {
+fn credits_balance(value: &Value) -> Option<String> {
+    let credits = value.get("credits")?;
+    if credits.get("unlimited").and_then(Value::as_bool) == Some(true) {
+        return Some("无限".to_string());
+    }
+    let raw = credits.get("balance")?;
+    let text = raw
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| raw.as_f64().map(|number| format!("{number:.2}")))?;
+    if text.is_empty() {
+        None
+    } else if text.starts_with('$') {
+        Some(text)
+    } else {
+        Some(format!("${text}"))
+    }
+}
+
+fn rate_window(value: Option<&Value>, fallback: &str) -> Option<UsageWindow> {
     let value = value?;
+    let name = match value.get("limit_window_seconds").and_then(Value::as_u64) {
+        Some(seconds) if seconds > 0 && seconds <= 36_000 => "会话".to_string(),
+        Some(seconds) if seconds >= 86_400 => "每周".to_string(),
+        _ => fallback.to_string(),
+    };
     let used = value
         .get("used_percent")
         .or_else(|| value.get("usedPercent"))

@@ -16,6 +16,7 @@ pub enum SecretKind {
     CursorSession,
     ClaudeOauth,
     OpenaiKey,
+    DeepseekKey,
 }
 
 impl SecretKind {
@@ -24,6 +25,7 @@ impl SecretKind {
             Self::CursorSession => "cursor_session",
             Self::ClaudeOauth => "claude_oauth",
             Self::OpenaiKey => "openai_key",
+            Self::DeepseekKey => "deepseek_key",
         }
     }
 
@@ -32,6 +34,7 @@ impl SecretKind {
             Self::CursorSession => "Cursor session",
             Self::ClaudeOauth => "Claude OAuth",
             Self::OpenaiKey => "OpenAI key",
+            Self::DeepseekKey => "DeepSeek key",
         }
     }
 }
@@ -41,6 +44,7 @@ pub struct SecretPresence {
     pub cursor: bool,
     pub claude: bool,
     pub openai: bool,
+    pub deepseek: bool,
 }
 
 pub(crate) trait SecretStore {
@@ -70,6 +74,7 @@ pub(crate) fn presence_of(store: &dyn SecretStore) -> SecretPresence {
         cursor: store.get(SecretKind::CursorSession).is_some(),
         claude: store.get(SecretKind::ClaudeOauth).is_some(),
         openai: store.get(SecretKind::OpenaiKey).is_some(),
+        deepseek: store.get(SecretKind::DeepseekKey).is_some(),
     }
 }
 
@@ -96,6 +101,9 @@ pub(crate) fn validate_secret(kind: SecretKind, raw: &str) -> Result<String, Str
         }
         SecretKind::OpenaiKey if !value.starts_with("sk-") => {
             Err("OpenAI key should start with sk-".to_string())
+        }
+        SecretKind::DeepseekKey if value.len() < 8 => {
+            Err("DeepSeek key looks too short".to_string())
         }
         _ => Ok(value.to_string()),
     }

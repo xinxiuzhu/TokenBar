@@ -11,6 +11,8 @@ pub enum ProviderId {
     Cursor,
     Claude,
     Openai,
+    Opencode,
+    Deepseek,
 }
 
 impl ProviderId {
@@ -19,6 +21,8 @@ impl ProviderId {
             Self::Cursor => "Cursor",
             Self::Claude => "Claude",
             Self::Openai => "OpenAI",
+            Self::Opencode => "OpenCode",
+            Self::Deepseek => "DeepSeek",
         }
     }
 
@@ -29,12 +33,28 @@ impl ProviderId {
             Self::Cursor => "R",
             Self::Claude => "C",
             Self::Openai => "O",
+            Self::Opencode => "OC",
+            Self::Deepseek => "D",
         }
     }
 
-    pub fn all() -> [Self; 3] {
-        [Self::Cursor, Self::Claude, Self::Openai]
+    pub fn all() -> [Self; 5] {
+        [
+            Self::Claude,
+            Self::Openai,
+            Self::Opencode,
+            Self::Deepseek,
+            Self::Cursor,
+        ]
     }
+}
+
+/// One model's local token and cost total.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelUsage {
+    pub name: String,
+    pub tokens: u64,
+    pub cost: Option<f64>,
 }
 
 /// One quota window inside a provider payload.
@@ -59,6 +79,11 @@ pub struct ProviderSnapshot {
     pub tokens: Option<u64>,
     /// Cache-read tokens, kept off the headline.
     pub cache_read_tokens: Option<u64>,
+    /// Prepaid balance, such as `$4.20` or `¥12.00`. Not a percentage.
+    pub balance: Option<String>,
+    /// Provider-reported cost, when the local log already computed it.
+    pub cost: Option<f64>,
+    pub models: Vec<ModelUsage>,
     pub plan: Option<String>,
     pub resets_at: Option<String>,
     /// Short source tag such as `usage-summary+events` or `missing`.
@@ -78,6 +103,9 @@ impl ProviderSnapshot {
             remaining_percent: None,
             tokens: None,
             cache_read_tokens: None,
+            balance: None,
+            cost: None,
+            models: Vec::new(),
             plan: None,
             resets_at: None,
             source: "missing".to_string(),
@@ -88,6 +116,12 @@ impl ProviderSnapshot {
     }
 
     pub fn menu_label(&self, mode: TitleMode) -> Option<String> {
+        if self.used_percent.is_none() && self.tokens.is_none() {
+            return self
+                .balance
+                .as_ref()
+                .map(|balance| format!("{} {balance}", self.prefix));
+        }
         crate::format::format_meter(&self.prefix, self.used_percent, self.tokens, mode)
     }
 
