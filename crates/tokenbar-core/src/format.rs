@@ -123,6 +123,10 @@ pub fn status_item_title(providers: &[ProviderSnapshot], mode: TitleMode) -> Str
             provider.used_percent.is_some()
                 || provider.tokens.is_some()
                 || provider.balance.is_some()
+                || provider
+                    .windows
+                    .iter()
+                    .any(|window| window.used_percent.is_some())
         })
         .collect();
     if visible.is_empty() {
@@ -130,7 +134,13 @@ pub fn status_item_title(providers: &[ProviderSnapshot], mode: TitleMode) -> Str
     }
     let quota_count = visible
         .iter()
-        .filter(|provider| provider.used_percent.is_some())
+        .filter(|provider| {
+            provider.used_percent.is_some()
+                || provider
+                    .windows
+                    .iter()
+                    .any(|window| window.used_percent.is_some())
+        })
         .count();
     let hide_token_totals = quota_count > 0;
     if mode == TitleMode::PercentText {
@@ -157,6 +167,9 @@ pub fn status_item_title(providers: &[ProviderSnapshot], mode: TitleMode) -> Str
 }
 
 fn status_percent(provider: &ProviderSnapshot, hide_token_totals: bool) -> Option<String> {
+    if let Some(summary) = status_windows(provider, TitleMode::PercentText) {
+        return Some(summary);
+    }
     if provider.used_percent.is_some() {
         return percent_label(&provider.prefix, provider.used_percent, provider.tokens);
     }
@@ -177,6 +190,10 @@ fn status_balance(
     show_number: bool,
     hide_token_totals: bool,
 ) -> Option<String> {
+    if let Some(summary) = status_windows(provider, TitleMode::BalanceBars) {
+        return Some(summary);
+    }
+    let _ = (cells, show_number);
     if let Some(used) = provider.used_percent {
         let remaining = remaining_percent(used);
         let bar = line_meter(remaining, cells);
@@ -197,6 +214,76 @@ fn status_balance(
         provider
             .tokens
             .map(|count| format!("{} {}", provider.prefix, format_compact(count)))
+    }
+}
+
+/// One menu-bar segment per plan window. Session comes first, then weekly.
+fn status_windows(provider: &ProviderSnapshot, mode: TitleMode) -> Option<String> {
+    let windows: Vec<_> = provider
+        .windows
+        .iter()
+        .filter(|window| window.used_percent.is_some())
+        .take(3)
+        .collect();
+    if windows.is_empty() {
+        return None;
+    }
+    let cells = if windows.len() == 1 { 8 } else { 4 };
+    let mut parts = Vec::with_capacity(windows.len());
+    for (index, window) in windows.iter().enumerate() {
+        let used = window.used_percent.unwrap_or(0.0);
+        let remaining = remaining_percent(used);
+        let label = tray_window_label(&window.name);
+        let number = format_percent(remaining);
+        let piece = match mode {
+            TitleMode::BalanceBars => {
+                let bar = line_meter(remaining, cells);
+                if index == 0 {
+                    format!("{} {label} {bar} {number}", provider.prefix)
+                } else {
+                    format!("{label} {bar} {number}")
+                }
+            }
+            TitleMode::PercentText => {
+                if index == 0 {
+                    format!("{} {label} {number}%", provider.prefix)
+                } else {
+                    format!("{label} {number}%")
+                }
+            }
+            TitleMode::IconOnly => return None,
+        };
+        parts.push(piece);
+    }
+    Some(parts.join(" · "))
+}
+
+fn tray_window_label(name: &str) -> String {
+    match name {
+        "five_hour" | "会话" | "session" => "5h".to_string(),
+        "seven_day" | "每周" | "week" => "周".to_string(),
+        "seven_day_opus" => "Opus".to_string(),
+        "seven_day_sonnet" => "Sonnet".to_string(),
+        "seven_day_oauth_apps" => "应用".to_string(),
+        "plan" | "套餐" => "套餐".to_string(),
+        "api" | "API" => "API".to_string(),
+        "auto" | "Auto" => "Auto".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Panel name for a plan window.
+pub fn window_label(name: &str) -> String {
+    match name {
+        "five_hour" | "会话" | "session" => "5 小时".to_string(),
+        "seven_day" | "每周" | "week" => "每周".to_string(),
+        "seven_day_opus" => "Opus 每周".to_string(),
+        "seven_day_sonnet" => "Sonnet 每周".to_string(),
+        "seven_day_oauth_apps" => "应用每周".to_string(),
+        "plan" | "套餐" => "套餐".to_string(),
+        "api" | "API" => "API".to_string(),
+        "auto" | "Auto" => "Auto".to_string(),
+        other => other.to_string(),
     }
 }
 
@@ -406,6 +493,40 @@ mod tests {
         assert_eq!(only_tokens, "O 9.7M");
         let text = status_item_title(&[claude], TitleMode::PercentText);
         assert_eq!(text, "C 28%");
+    }
+
+    #[test]
+    fn status_item_lists_session_and_week() {
+        use crate::model::UsageWindow;
+        let mut openai = ProviderSnapshot::empty(crate::model::ProviderId::Openai);
+        openai.tokens = Some(9_700_000);
+        openai.windows = vec![
+            UsageWindow {
+                name: "five_hour".to_string(),
+                used_percent: Some(12.0),
+                resets_at: None,
+            },
+            UsageWindow {
+                name: "seven_day".to_string(),
+                used_percent: Some(40.0),
+                resets_at: None,
+            },
+        ];
+        openai.used_percent = Some(12.0);
+        let title = status_item_title(&[openai], TitleMode::PercentText);
+        assert_eq!(title, "O 5h 88% · 周 60%");
+        let bars = status_item_title(
+            &[ProviderSnapshot {
+                windows: vec![UsageWindow {
+                    name: "five_hour".to_string(),
+                    used_percent: Some(12.0),
+                    resets_at: None,
+                }],
+                ..ProviderSnapshot::empty(crate::model::ProviderId::Claude)
+            }],
+            TitleMode::BalanceBars,
+        );
+        assert_eq!(bars, "C 5h ━━━━━━━─ 88");
     }
 
     #[test]

@@ -261,7 +261,7 @@ fn provider_card(
         .windows
         .iter()
         .filter(|window| window.used_percent.is_some())
-        .take(3)
+        .take(4)
         .cloned()
         .collect();
     let models: Vec<_> = provider.models.iter().take(6).cloned().collect();
@@ -327,8 +327,9 @@ fn provider_card(
                 .when(!windows.is_empty(), |card| {
                     card.children(windows.iter().map(|window| {
                         gauge(
-                            window_title(&window.name),
+                            tokenbar_core::window_label(&window.name),
                             window.used_percent.unwrap_or(0.0),
+                            window.resets_at.as_deref(),
                         )
                     }))
                 })
@@ -374,33 +375,51 @@ fn provider_card(
         .on_click(cx.listener(move |_this, _event, _window, cx| toggle_expanded(id, cx)))
 }
 
-fn gauge(label: impl Into<String>, used: f64) -> impl IntoElement {
+fn gauge(label: impl Into<String>, used: f64, resets_at: Option<&str>) -> impl IntoElement {
     let remaining = (100.0 - used).clamp(0.0, 100.0);
+    let reset = resets_at.and_then(|stamp| {
+        let hint = reset_hint(stamp);
+        if hint.is_empty() {
+            None
+        } else {
+            Some(hint)
+        }
+    });
+    let ink = if used >= 85.0 {
+        0xff453a
+    } else if used >= 60.0 {
+        0xff9f0a
+    } else {
+        0x30d158
+    };
     div()
         .flex()
         .flex_col()
-        .gap(px(2.))
+        .gap(px(4.))
         .child(
             div()
                 .flex()
+                .items_center()
                 .justify_between()
-                .text_size(px(11.))
-                .text_color(rgb(MUTED))
-                .child(label.into())
-                .child(format!("剩余 {}%", format_percent(remaining))),
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(TEXT))
+                        .child(label.into()),
+                )
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(ink))
+                        .child(format!("剩余 {}%", format_percent(remaining))),
+                ),
         )
         .child(usage_bar(used))
-}
-
-fn window_title(name: &str) -> String {
-    match name {
-        "five_hour" => "5 小时".to_string(),
-        "seven_day" => "每周".to_string(),
-        "seven_day_opus" => "Opus 每周".to_string(),
-        "seven_day_sonnet" => "Sonnet 每周".to_string(),
-        "会话" | "每周" => name.to_string(),
-        other => other.to_string(),
-    }
+        .when_some(reset, |row, hint| {
+            row.child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(hint))
+        })
 }
 
 fn model_side(model: &tokenbar_core::ModelUsage) -> String {
@@ -474,19 +493,19 @@ fn usage_bar(used: f64) -> impl IntoElement {
     };
     div()
         .flex()
-        .h(px(4.))
+        .h(px(6.))
         .w_full()
-        .mt(px(2.))
+        .mt(px(1.))
         .rounded_full()
         .bg(rgb(0x3a3a3c))
         .child(
             div()
-                .h(px(4.))
+                .h(px(6.))
                 .flex_grow(pct.max(0.01))
                 .rounded_full()
                 .bg(rgb(color)),
         )
-        .child(div().h(px(4.)).flex_grow((100.0 - pct).max(0.01)))
+        .child(div().h(px(6.)).flex_grow((100.0 - pct).max(0.01)))
 }
 
 fn settings_card(
@@ -911,13 +930,25 @@ fn face_for(provider: &ProviderSnapshot) -> RowFace {
     if provider.detail.contains("沿用上次") {
         bits.push("沿用上次".to_string());
     }
-    if let Some(reset) = provider.resets_at.as_deref() {
-        let hint = reset_hint(reset);
-        if !hint.is_empty() {
-            bits.push(hint);
+    let has_windows = provider
+        .windows
+        .iter()
+        .any(|window| window.used_percent.is_some());
+    if !has_windows {
+        if let Some(reset) = provider.resets_at.as_deref() {
+            let hint = reset_hint(reset);
+            if !hint.is_empty() {
+                bits.push(hint);
+            }
         }
     }
-    if provider.used_percent.is_none() {
+    if has_windows {
+        if let Some(tokens) = provider.tokens {
+            if tokens > 0 {
+                bits.push(format!("本地 {}", format_compact(tokens)));
+            }
+        }
+    } else if provider.used_percent.is_none() {
         if provider.balance.is_some() && provider.tokens.is_some() {
             if let Some(tokens) = provider.tokens {
                 bits.push(format!("本地 {}", format_compact(tokens)));

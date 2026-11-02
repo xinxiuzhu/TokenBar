@@ -93,6 +93,21 @@ pub(crate) fn fetch(
         notes.push(format!("jsonl {local} tokens"));
     }
 
+    if snapshot.windows.is_empty() {
+        if let Some(from_log) = codex_log_limits(&paths.codex_session_roots) {
+            snapshot.used_percent = from_log.used_percent;
+            snapshot.resets_at = from_log.resets_at;
+            snapshot.windows = from_log.windows;
+            if snapshot.plan.is_none() {
+                snapshot.plan = from_log.plan;
+            }
+            if snapshot.balance.is_none() {
+                snapshot.balance = from_log.balance;
+            }
+            sources.push("jsonl-limits");
+        }
+    }
+
     if sources.is_empty() {
         snapshot.error = Some(
             wham_error
@@ -207,40 +222,145 @@ fn parse_wham(response: HttpResponse) -> Result<WhamUsage, String> {
     }) {
         return Err(format!("codex wham: {err}"));
     }
+    windows_from_payload(&value, &response.headers)
+        .ok_or_else(|| "codex wham response had no rate-limit windows".to_string())
+}
+
+fn windows_from_payload(value: &Value, headers: &[(String, String)]) -> Option<WhamUsage> {
     let plan = value
         .get("plan_type")
         .and_then(Value::as_str)
-        .map(str::to_string);
-    let rate = value.get("rate_limit").unwrap_or(&value);
+        .map(str::to_string)
+        .or_else(|| {
+            find_rate_limits(value)
+                .and_then(|rate| rate.get("plan_type"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    let rate = find_rate_limits(value);
     let mut windows = Vec::new();
-    if let Some(window) = rate_window(rate.get("primary_window"), "会话") {
-        windows.push(window);
-    }
-    if let Some(window) = rate_window(rate.get("secondary_window"), "每周") {
-        windows.push(window);
+    if let Some(rate) = rate {
+        for (key, fallback) in [("primary", "five_hour"), ("secondary", "seven_day")] {
+            if let Some(window) = modern_window(rate.get(key), fallback) {
+                windows.push(window);
+            }
+        }
+        if windows.is_empty() {
+            if let Some(window) = rate_window(rate.get("primary_window"), "five_hour") {
+                windows.push(window);
+            }
+            if let Some(window) = rate_window(rate.get("secondary_window"), "seven_day") {
+                windows.push(window);
+            }
+        }
     }
     if windows.is_empty() {
-        if let Some(percent) = header_percent(&response.headers, "x-codex-primary-used-percent") {
+        if let Some(percent) = header_percent(headers, "x-codex-primary-used-percent") {
             windows.push(UsageWindow {
-                name: "primary".to_string(),
+                name: "five_hour".to_string(),
                 used_percent: Some(percent),
                 resets_at: None,
             });
         }
     }
     if windows.is_empty() {
-        return Err("codex wham response had no rate-limit windows".to_string());
+        return None;
     }
     let headline = windows.iter().find_map(|window| window.used_percent);
     let resets_at = windows.iter().find_map(|window| window.resets_at.clone());
-    let balance = credits_balance(rate).or_else(|| credits_balance(&value));
-    Ok(WhamUsage {
+    let balance = rate
+        .and_then(credits_balance)
+        .or_else(|| credits_balance(value));
+    Some(WhamUsage {
         used_percent: headline,
         resets_at,
         plan,
         windows,
         balance,
     })
+}
+
+fn find_rate_limits(value: &Value) -> Option<&Value> {
+    if has_limit_windows(value) {
+        return Some(value);
+    }
+    let object = value.as_object()?;
+    for key in ["rate_limits", "rate_limit", "usage"] {
+        if let Some(child) = object.get(key) {
+            if has_limit_windows(child) {
+                return Some(child);
+            }
+        }
+    }
+    for (_, child) in object {
+        if has_limit_windows(child) {
+            return Some(child);
+        }
+        let Some(nested) = child.as_object() else {
+            continue;
+        };
+        for key in ["rate_limits", "rate_limit", "usage"] {
+            if let Some(inner) = nested.get(key) {
+                if has_limit_windows(inner) {
+                    return Some(inner);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn has_limit_windows(value: &Value) -> bool {
+    value.get("primary").is_some()
+        || value.get("secondary").is_some()
+        || value.get("primary_window").is_some()
+        || value.get("secondary_window").is_some()
+}
+
+fn modern_window(value: Option<&Value>, fallback: &str) -> Option<UsageWindow> {
+    let value = value?;
+    let minutes = value.get("window_minutes").and_then(Value::as_u64);
+    let seconds = value.get("limit_window_seconds").and_then(Value::as_u64);
+    let name = canonical_window_name(minutes, seconds, fallback);
+    let used = json_f64(value.get("used_percent")).or_else(|| json_f64(value.get("usedPercent")));
+    let resets_at = value
+        .get("reset_at")
+        .or_else(|| value.get("resets_at"))
+        .and_then(reset_string)
+        .or_else(|| resets_in_seconds(value));
+    if used.is_none() && resets_at.is_none() {
+        return None;
+    }
+    Some(UsageWindow {
+        name,
+        used_percent: used,
+        resets_at,
+    })
+}
+
+fn canonical_window_name(minutes: Option<u64>, seconds: Option<u64>, fallback: &str) -> String {
+    let minutes = minutes.or_else(|| seconds.map(|seconds| seconds / 60));
+    match minutes {
+        Some(minutes) if (1..600).contains(&minutes) => "five_hour".to_string(),
+        Some(minutes) if (6 * 1440..=8 * 1440).contains(&minutes) => "seven_day".to_string(),
+        Some(minutes) if minutes >= 1440 => format!("{} 天", minutes / 1440),
+        Some(minutes) if minutes >= 60 => format!("{} 小时", minutes / 60),
+        _ => fallback.to_string(),
+    }
+}
+
+fn json_f64(value: Option<&Value>) -> Option<f64> {
+    let value = value?;
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+        .filter(|number| number.is_finite())
+}
+
+fn resets_in_seconds(value: &Value) -> Option<String> {
+    let seconds = value.get("resets_in_seconds")?.as_i64()?;
+    let when = chrono::Utc::now() + chrono::Duration::seconds(seconds);
+    Some(when.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }
 
 fn credits_balance(value: &Value) -> Option<String> {
@@ -264,15 +384,9 @@ fn credits_balance(value: &Value) -> Option<String> {
 
 fn rate_window(value: Option<&Value>, fallback: &str) -> Option<UsageWindow> {
     let value = value?;
-    let name = match value.get("limit_window_seconds").and_then(Value::as_u64) {
-        Some(seconds) if seconds > 0 && seconds <= 36_000 => "会话".to_string(),
-        Some(seconds) if seconds >= 86_400 => "每周".to_string(),
-        _ => fallback.to_string(),
-    };
-    let used = value
-        .get("used_percent")
-        .or_else(|| value.get("usedPercent"))
-        .and_then(Value::as_f64);
+    let seconds = value.get("limit_window_seconds").and_then(Value::as_u64);
+    let name = canonical_window_name(None, seconds, fallback);
+    let used = json_f64(value.get("used_percent")).or_else(|| json_f64(value.get("usedPercent")));
     let resets_at = value
         .get("reset_at")
         .or_else(|| value.get("resets_at"))
@@ -320,6 +434,83 @@ fn fetch_org(http: &dyn Http, key: &str) -> Result<u64, String> {
     Ok(sum_org_usage(&value))
 }
 
+fn codex_log_limits(roots: &[std::path::PathBuf]) -> Option<WhamUsage> {
+    let path = newest_jsonl(roots)?;
+    let text = read_tail(&path, 256 * 1024).ok()?;
+    for line in text.lines().rev() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(parsed) = windows_from_payload(&value, &[]) {
+            return Some(parsed);
+        }
+    }
+    None
+}
+
+fn newest_jsonl(roots: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+    let mut best: Option<(SystemTime, std::path::PathBuf)> = None;
+    let mut seen = 0usize;
+    for root in roots {
+        visit_jsonl(root, 0, &mut seen, &mut best);
+    }
+    best.map(|(_, path)| path)
+}
+
+fn visit_jsonl(
+    dir: &std::path::Path,
+    depth: usize,
+    seen: &mut usize,
+    best: &mut Option<(SystemTime, std::path::PathBuf)>,
+) {
+    if depth > 8 || *seen > 2_000 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if *seen > 2_000 {
+            return;
+        }
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
+            visit_jsonl(&path, depth + 1, seen, best);
+            continue;
+        }
+        if !path.extension().is_some_and(|ext| ext == "jsonl") {
+            continue;
+        }
+        *seen += 1;
+        let Ok(modified) = entry.metadata().and_then(|meta| meta.modified()) else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(when, _)| modified > *when) {
+            *best = Some((modified, path));
+        }
+    }
+}
+
+fn read_tail(path: &std::path::Path, max: usize) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    if len > max as u64 {
+        file.seek(SeekFrom::Start(len - max as u64))?;
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    if len > max as u64 {
+        if let Some(index) = text.find('\n') {
+            text.drain(..=index);
+        }
+    }
+    Ok(text)
+}
+
 pub(crate) fn sum_org_usage(value: &Value) -> u64 {
     let Some(buckets) = value.get("data").and_then(Value::as_array) else {
         return 0;
@@ -362,6 +553,19 @@ mod tests {
         .unwrap();
         assert_eq!(wham.used_percent, Some(12.5));
         assert_eq!(wham.plan.as_deref(), Some("plus"));
+        assert_eq!(wham.windows[0].name, "five_hour");
+        assert_eq!(wham.windows[1].name, "seven_day");
+        let modern = parse_wham(HttpResponse {
+            status: 200,
+            body: r#"{"rate_limits":{"plan_type":"plus","primary":{"used_percent":37.5,"window_minutes":300,"resets_in_seconds":3600},"secondary":{"used_percent":12,"window_minutes":10080}}}"#.into(),
+            headers: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(modern.windows[0].name, "five_hour");
+        assert_eq!(modern.windows[0].used_percent, Some(37.5));
+        assert!(modern.windows[0].resets_at.is_some());
+        assert_eq!(modern.windows[1].name, "seven_day");
+        assert_eq!(modern.plan.as_deref(), Some("plus"));
         let org = sum_org_usage(&serde_json::json!({
             "data": [{"results": [{"input_tokens": 1000, "output_tokens": 200}]}]
         }));
@@ -395,6 +599,45 @@ mod tests {
             Some("O 1.2k")
         );
         assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn codex_log_rate_limits_replace_a_token_headline() {
+        let dir = std::env::temp_dir().join(format!("tokenbar-codex-limits-{}", unique()));
+        let day = dir.join("sessions").join("2026").join("11").join("02");
+        fs::create_dir_all(&day).unwrap();
+        fs::write(
+            day.join("rollout-demo.jsonl"),
+            concat!(
+                r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":9000000,"output_tokens":700000}}}}"#,
+                "\n",
+                r#"{"type":"event_msg","payload":{"rate_limits":{"plan_type":"plus","primary":{"used_percent":20,"window_minutes":300},"secondary":{"used_percent":55,"window_minutes":10080}}}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let paths = ProviderPaths::from_roots(PathRoots {
+            home: PathBuf::from("/unused"),
+            config: PathBuf::from("/unused"),
+            claude_config_dir: None,
+            codex_home: Some(dir.clone()),
+        });
+        let snapshot = fetch(
+            &ScriptedHttp { routes: Vec::new() },
+            &MemoryStore::new(),
+            &paths,
+        );
+        assert_eq!(snapshot.windows.len(), 2);
+        assert_eq!(snapshot.windows[0].name, "five_hour");
+        assert_eq!(snapshot.windows[1].name, "seven_day");
+        assert_eq!(
+            crate::format::status_item_title(
+                std::slice::from_ref(&snapshot),
+                crate::format::TitleMode::PercentText
+            ),
+            "O 5h 80% · 周 45%"
+        );
         let _ = fs::remove_dir_all(dir);
     }
 

@@ -235,16 +235,32 @@ fn parse_usage(response: crate::http::HttpResponse) -> Result<ParsedUsage, Strin
     {
         return Err(format!("claude usage: {err}"));
     }
+    let root = claude_usage_root(&value);
     let mut windows = Vec::new();
-    for name in [
+    const KNOWN: [&str; 5] = [
         "five_hour",
         "seven_day",
         "seven_day_sonnet",
         "seven_day_opus",
-    ] {
-        if let Some(window) = usage_window(name, value.get(name)) {
+        "seven_day_oauth_apps",
+    ];
+    for name in KNOWN {
+        if let Some(window) = usage_window(name, root.get(name), true) {
             windows.push(window);
         }
+    }
+    if let Some(object) = root.as_object() {
+        let mut extra = Vec::new();
+        for (key, child) in object {
+            if KNOWN.contains(&key.as_str()) || key == "extra_usage" {
+                continue;
+            }
+            if let Some(window) = usage_window(key, Some(child), false) {
+                extra.push(window);
+            }
+        }
+        extra.sort_by(|left, right| left.name.cmp(&right.name));
+        windows.extend(extra);
     }
     let headline = windows.iter().find_map(|window| window.used_percent);
     let resets_at = windows.iter().find_map(|window| window.resets_at.clone());
@@ -258,10 +274,35 @@ fn parse_usage(response: crate::http::HttpResponse) -> Result<ParsedUsage, Strin
     })
 }
 
-fn usage_window(name: &str, value: Option<&Value>) -> Option<UsageWindow> {
+fn claude_usage_root(value: &Value) -> &Value {
+    if value.get("five_hour").is_some() || value.get("seven_day").is_some() {
+        return value;
+    }
+    if let Some(object) = value.as_object() {
+        for (_, child) in object {
+            if child.get("five_hour").is_some() || child.get("seven_day").is_some() {
+                return child;
+            }
+        }
+    }
+    value
+}
+
+fn usage_window(name: &str, value: Option<&Value>, known: bool) -> Option<UsageWindow> {
     let value = value?;
+    if value.is_null() {
+        return None;
+    }
     let used = value.get("utilization").and_then(Value::as_f64);
     let resets_at = value.get("resets_at").and_then(reset_string);
+    let has_dollars = value.get("limit_dollars").and_then(Value::as_f64).is_some()
+        || value.get("used_dollars").and_then(Value::as_f64).is_some();
+    if !known {
+        let alive = used.unwrap_or(0.0) > 0.0 || resets_at.is_some() || has_dollars;
+        if !alive {
+            return None;
+        }
+    }
     if used.is_none() && resets_at.is_none() {
         return None;
     }
@@ -295,6 +336,21 @@ mod tests {
         let parsed = parse_usage(response).unwrap();
         assert_eq!(parsed.headline, Some(72.0));
         assert_eq!(parsed.windows.len(), 2);
+        let dormant = crate::http::HttpResponse {
+            status: 200,
+            body: r#"{"five_hour":{"utilization":0},"seven_day":{"utilization":14,"resets_at":"2026-08-12T00:00:00Z"},"nimbus_quill":{"utilization":0},"seven_day_oauth_apps":{"utilization":3}}"#.into(),
+            headers: Vec::new(),
+        };
+        let parsed = parse_usage(dormant).unwrap();
+        let names: Vec<_> = parsed
+            .windows
+            .iter()
+            .map(|window| window.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["five_hour", "seven_day", "seven_day_oauth_apps"]
+        );
     }
 
     #[test]
