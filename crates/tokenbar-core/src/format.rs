@@ -110,6 +110,110 @@ fn percent_label(prefix: &str, used_percent: Option<f64>, tokens: Option<u64>) -
     }
 }
 
+/// Menu-bar text. Quota providers become a thin remaining meter. A raw token
+/// total such as `O 9.7M` is shown only when nothing has a plan percent, so
+/// billable millions do not sit beside the meters.
+pub fn status_item_title(providers: &[ProviderSnapshot], mode: TitleMode) -> String {
+    if mode == TitleMode::IconOnly {
+        return String::new();
+    }
+    let visible: Vec<&ProviderSnapshot> = providers
+        .iter()
+        .filter(|provider| {
+            provider.used_percent.is_some()
+                || provider.tokens.is_some()
+                || provider.balance.is_some()
+        })
+        .collect();
+    if visible.is_empty() {
+        return "TokenBar".to_string();
+    }
+    let quota_count = visible
+        .iter()
+        .filter(|provider| provider.used_percent.is_some())
+        .count();
+    let hide_token_totals = quota_count > 0;
+    if mode == TitleMode::PercentText {
+        let parts: Vec<String> = visible
+            .iter()
+            .filter_map(|provider| status_percent(provider, hide_token_totals))
+            .collect();
+        return if parts.is_empty() {
+            "TokenBar".to_string()
+        } else {
+            parts.join(" · ")
+        };
+    }
+    let cells = if quota_count <= 1 { 8 } else { 4 };
+    let parts: Vec<String> = visible
+        .iter()
+        .filter_map(|provider| status_balance(provider, cells, quota_count == 1, hide_token_totals))
+        .collect();
+    if parts.is_empty() {
+        "TokenBar".to_string()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+fn status_percent(provider: &ProviderSnapshot, hide_token_totals: bool) -> Option<String> {
+    if provider.used_percent.is_some() {
+        return percent_label(&provider.prefix, provider.used_percent, provider.tokens);
+    }
+    if let Some(balance) = &provider.balance {
+        return Some(format!("{} {balance}", provider.prefix));
+    }
+    if hide_token_totals {
+        return None;
+    }
+    provider
+        .tokens
+        .map(|count| format!("{} {}", provider.prefix, format_compact(count)))
+}
+
+fn status_balance(
+    provider: &ProviderSnapshot,
+    cells: usize,
+    show_number: bool,
+    hide_token_totals: bool,
+) -> Option<String> {
+    if let Some(used) = provider.used_percent {
+        let remaining = remaining_percent(used);
+        let bar = line_meter(remaining, cells);
+        if show_number {
+            Some(format!(
+                "{} {bar} {}",
+                provider.prefix,
+                format_percent(remaining)
+            ))
+        } else {
+            Some(format!("{} {bar}", provider.prefix))
+        }
+    } else if let Some(balance) = &provider.balance {
+        Some(format!("{} {balance}", provider.prefix))
+    } else if hide_token_totals {
+        None
+    } else {
+        provider
+            .tokens
+            .map(|count| format!("{} {}", provider.prefix, format_compact(count)))
+    }
+}
+
+/// Thin horizontal meter. `━` is remaining balance, `─` is the spent part.
+/// Menu-bar type renders this more evenly than the heavy `█` / `░` blocks
+/// kept for the `--check` title.
+pub fn line_meter(remaining: f64, cells: usize) -> String {
+    let cells = cells.max(1);
+    let filled = ((remaining.clamp(0.0, 100.0) / 100.0) * cells as f64).round() as usize;
+    let filled = filled.min(cells);
+    let mut bar = String::with_capacity(cells * 3);
+    for index in 0..cells {
+        bar.push(if index < filled { '━' } else { '─' });
+    }
+    bar
+}
+
 pub fn tray_title(providers: &[ProviderSnapshot], mode: TitleMode) -> String {
     if mode == TitleMode::IconOnly {
         return String::new();
@@ -279,6 +383,29 @@ mod tests {
             format_meter("C", Some(72.0), None, TitleMode::BalanceBars).as_deref(),
             Some("C █░░░")
         );
+    }
+
+    #[test]
+    fn line_meter_tracks_remaining() {
+        assert_eq!(line_meter(100.0, 4), "━━━━");
+        assert_eq!(line_meter(0.0, 4), "────");
+        assert_eq!(line_meter(28.0, 8), "━━──────");
+        assert_eq!(line_meter(38.0, 8), "━━━─────");
+    }
+
+    #[test]
+    fn status_item_hides_token_millions_beside_a_plan() {
+        let mut claude = ProviderSnapshot::empty(crate::model::ProviderId::Claude);
+        claude.used_percent = Some(72.0);
+        claude = claude.with_derived();
+        let mut openai = ProviderSnapshot::empty(crate::model::ProviderId::Openai);
+        openai.tokens = Some(9_700_000);
+        let both = status_item_title(&[claude.clone(), openai.clone()], TitleMode::BalanceBars);
+        assert_eq!(both, "C ━━────── 28");
+        let only_tokens = status_item_title(&[openai], TitleMode::BalanceBars);
+        assert_eq!(only_tokens, "O 9.7M");
+        let text = status_item_title(&[claude], TitleMode::PercentText);
+        assert_eq!(text, "C 28%");
     }
 
     #[test]

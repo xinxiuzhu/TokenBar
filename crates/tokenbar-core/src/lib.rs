@@ -24,7 +24,8 @@ mod settings;
 
 pub use collect::{check_report, collect_snapshot, offline_snapshot, placeholder_snapshot};
 pub use format::{
-    format_compact, format_percent, remaining_percent, reset_hint, tray_title, TitleMode,
+    format_compact, format_percent, line_meter, remaining_percent, reset_hint, status_item_title,
+    tray_title, TitleMode,
 };
 pub use model::{ModelUsage, ProviderId, ProviderSnapshot, UsageSnapshot, UsageWindow};
 pub use secrets::{delete_secret, save_secret, secret_presence, SecretKind, SecretPresence};

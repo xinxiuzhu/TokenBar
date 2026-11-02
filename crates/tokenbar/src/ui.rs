@@ -1,21 +1,18 @@
 //! GPUI panel and gpui-tray status item.
 //!
-//! Primary click opens the panel. The panel is the place for refresh,
-//! settings, and quit. There is no native menu, because on macOS a menu
-//! would consume the click that should open the panel.
-//!
-//! The panel speaks Chinese and names providers in full. The tray title
-//! stays the compact `R42% C72% O1.2k` string. Paths and request URLs stay
-//! in `--check` JSON; the panel only shows them after a row is expanded.
+//! A left click on the status item toggles this panel under the menu bar.
+//! On macOS the click is observed directly, because an accessory app often
+//! never receives the status button's action. Right-click keeps Refresh,
+//! Settings, and Quit. The panel itself is Chinese.
 
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
     div, img, point, px, rgb, size, App, Bounds, ClipboardItem, Context, FontWeight, Global, Image,
-    ImageFormat, ObjectFit, QuitMode, Render, TitlebarOptions, Window, WindowBounds, WindowHandle,
-    WindowOptions,
+    ImageFormat, ObjectFit, Pixels, Point, QuitMode, Render, TitlebarOptions, Window, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions,
 };
 use gpui_tray::{Icon, Tray};
 use tokenbar_core::{
@@ -24,7 +21,6 @@ use tokenbar_core::{
     SecretKind, SecretPresence, TitleMode, UsageSnapshot,
 };
 const LOGO_SVG: &[u8] = include_bytes!("../../../assets/logo.svg");
-const TRAY_SVG: &[u8] = include_bytes!("../../../assets/logo-16.svg");
 
 const BG: u32 = 0x161618;
 const CARD: u32 = 0x222226;
@@ -37,6 +33,7 @@ const TRACK: u32 = 0x2c2c31;
 struct Shell {
     tray: Tray,
     window: Option<WindowHandle<Panel>>,
+    shown_at: Option<Instant>,
     snapshot: UsageSnapshot,
     status: String,
     show_settings: bool,
@@ -44,6 +41,27 @@ struct Shell {
     saved: SecretPresence,
     settings: DisplaySettings,
     brand_icon: Icon,
+}
+
+/// Cocoa frame of the menu-bar item. Only the macOS click monitor fills it.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[derive(Clone, Copy, Debug)]
+pub struct StatusAnchor {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// Status-item commands. On macOS these arrive from the click monitor.
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+pub enum TrayCommand {
+    Toggle(Option<StatusAnchor>),
+    Refresh,
+    Settings,
+    Quit,
+    Dismiss,
 }
 
 impl Global for Shell {}
@@ -88,6 +106,20 @@ impl Render for Panel {
             status
         };
 
+        let pending = all_pending(&providers);
+        let cards: Vec<_> = providers
+            .iter()
+            .filter(|provider| has_panel_data(provider))
+            .cloned()
+            .collect();
+        let empty_line = if providers.is_empty() {
+            "没有要显示的服务"
+        } else if pending {
+            "正在读取"
+        } else {
+            "暂无用量"
+        };
+
         div()
             .id("tokenbar-root")
             .size_full()
@@ -95,7 +127,7 @@ impl Render for Panel {
             .flex_col()
             .bg(rgb(BG))
             .text_color(rgb(TEXT))
-            .child(header(&subtitle, &providers, TitleMode::PercentText))
+            .child(header(&subtitle))
             .child(
                 div()
                     .id("tokenbar-body")
@@ -103,21 +135,22 @@ impl Render for Panel {
                     .overflow_y_scroll()
                     .flex()
                     .flex_col()
-                    .gap(px(8.))
-                    .px(px(12.))
-                    .pb(px(8.))
+                    .gap(px(10.))
+                    .px(px(14.))
+                    .pb(px(10.))
                     .children(
-                        providers.iter().map(|provider| {
+                        cards.iter().map(|provider| {
                             provider_card(provider, expanded == Some(provider.id), cx)
                         }),
                     )
-                    .when(providers.is_empty(), |parent| {
+                    .when(cards.is_empty(), |parent| {
                         parent.child(
                             div()
-                                .px(px(4.))
-                                .text_size(px(12.))
+                                .px(px(2.))
+                                .py(px(8.))
+                                .text_size(px(13.))
                                 .text_color(rgb(MUTED))
-                                .child("在设置里打开要看的服务"),
+                                .child(empty_line),
                         )
                     })
                     .when(show_settings, |parent| {
@@ -128,67 +161,45 @@ impl Render for Panel {
     }
 }
 
-fn header(subtitle: &str, providers: &[ProviderSnapshot], mode: TitleMode) -> impl IntoElement {
+fn header(subtitle: &str) -> impl IntoElement {
     div()
         .flex()
         .items_center()
-        .justify_between()
-        .px(px(14.))
-        .pt(px(12.))
-        .pb(px(10.))
+        .gap(px(10.))
+        .px(px(16.))
+        .pt(px(14.))
+        .pb(px(12.))
+        .child(logo_mark())
         .child(
             div()
                 .flex()
-                .items_center()
-                .gap(px(8.))
-                .child(logo_mark())
+                .flex_col()
+                .gap(px(1.))
                 .child(
                     div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(1.))
-                        .child(
-                            div()
-                                .text_size(px(13.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child("TokenBar"),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(rgb(MUTED))
-                                .child(subtitle.to_string()),
-                        ),
+                        .text_size(px(15.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("TokenBar"),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(MUTED))
+                        .child(subtitle.to_string()),
                 ),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .children(providers.iter().filter_map(|provider| {
-                    let label = provider.menu_label(mode)?;
-                    Some(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(rgb(MUTED))
-                            .whitespace_nowrap()
-                            .child(label),
-                    )
-                })),
         )
 }
 
 fn logo_mark() -> impl IntoElement {
     img(panel_logo())
         .id("tokenbar-logo")
-        .w(px(22.))
-        .h(px(22.))
+        .w(px(28.))
+        .h(px(28.))
         .object_fit(ObjectFit::Contain)
         .with_fallback(|| {
             div()
-                .size(px(22.))
-                .rounded(px(5.))
+                .size(px(28.))
+                .rounded(px(7.))
                 .bg(rgb(0x0b1b3a))
                 .into_any_element()
         })
@@ -198,6 +209,24 @@ fn panel_logo() -> Arc<Image> {
     static LOGO: OnceLock<Arc<Image>> = OnceLock::new();
     LOGO.get_or_init(|| Arc::new(Image::from_bytes(ImageFormat::Svg, LOGO_SVG.to_vec())))
         .clone()
+}
+
+fn has_panel_data(provider: &ProviderSnapshot) -> bool {
+    provider.used_percent.is_some()
+        || provider.tokens.is_some()
+        || provider.balance.is_some()
+        || provider.cost.is_some()
+        || provider
+            .windows
+            .iter()
+            .any(|window| window.used_percent.is_some())
+}
+
+fn all_pending(providers: &[ProviderSnapshot]) -> bool {
+    !providers.is_empty()
+        && providers
+            .iter()
+            .all(|provider| provider.source == "pending" && !has_panel_data(provider))
 }
 
 fn panel_rank(id: ProviderId) -> u8 {
@@ -266,7 +295,7 @@ fn provider_card(
                                 .gap(px(8.))
                                 .child(
                                     div()
-                                        .text_size(px(13.))
+                                        .text_size(px(14.))
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .child(provider.label.clone()),
                                 )
@@ -281,11 +310,14 @@ fn provider_card(
                         )
                         .child(
                             div()
-                                .text_size(if provider.balance.is_some() {
-                                    px(18.)
-                                } else {
-                                    px(13.)
-                                })
+                                .text_size(
+                                    if provider.used_percent.is_none() && provider.balance.is_some()
+                                    {
+                                        px(20.)
+                                    } else {
+                                        px(15.)
+                                    },
+                                )
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(value_color))
                                 .whitespace_nowrap()
@@ -303,14 +335,16 @@ fn provider_card(
                 .when(windows.is_empty(), |card| {
                     card.when_some(face.bar, |inner, used| inner.child(usage_bar(used)))
                 })
-                .child(
-                    div()
-                        .text_size(px(11.))
-                        .line_height(px(15.))
-                        .text_color(rgb(MUTED))
-                        .whitespace_normal()
-                        .child(face.subtitle),
-                )
+                .when(!face.subtitle.is_empty(), |card| {
+                    card.child(
+                        div()
+                            .text_size(px(11.))
+                            .line_height(px(15.))
+                            .text_color(rgb(MUTED))
+                            .whitespace_normal()
+                            .child(face.subtitle.clone()),
+                    )
+                })
                 .when(expanded, |card| {
                     card.when(!models.is_empty(), |inner| {
                         inner.child(div().flex().flex_col().gap(px(2.)).children(
@@ -440,19 +474,19 @@ fn usage_bar(used: f64) -> impl IntoElement {
     };
     div()
         .flex()
-        .h(px(3.))
+        .h(px(4.))
         .w_full()
-        .mt(px(4.))
+        .mt(px(2.))
         .rounded_full()
         .bg(rgb(0x3a3a3c))
         .child(
             div()
-                .h(px(3.))
+                .h(px(4.))
                 .flex_grow(pct.max(0.01))
                 .rounded_full()
                 .bg(rgb(color)),
         )
-        .child(div().h(px(3.)).flex_grow((100.0 - pct).max(0.01)))
+        .child(div().h(px(4.)).flex_grow((100.0 - pct).max(0.01)))
 }
 
 fn settings_card(
@@ -637,7 +671,7 @@ fn settings_card(
                 .line_height(px(15.))
                 .text_color(rgb(MUTED))
                 .whitespace_normal()
-                .child("从剪贴板粘贴凭据，会覆盖自动读取。"),
+                .child("凭据只保存在本机。"),
         )
         .child(secret_row(
             "paste-cursor",
@@ -650,7 +684,7 @@ fn settings_card(
         .child(secret_row(
             "paste-claude",
             "clear-claude",
-            "粘贴 Claude OAuth",
+            "粘贴 Claude 凭据",
             saved.claude,
             SecretKind::ClaudeOauth,
             cx,
@@ -677,7 +711,7 @@ fn settings_card(
                 .line_height(px(15.))
                 .text_color(rgb(MUTED))
                 .whitespace_normal()
-                .child("未粘贴时，仍会读取 Cursor 登录、Claude 凭据和 Codex 日志。"),
+                .child("未粘贴时，自动读取本机登录。"),
         )
 }
 
@@ -834,7 +868,7 @@ fn publish_title(cx: &mut App) {
             .cloned()
             .collect();
         let title = shell.settings.menu_title(&shell.snapshot.providers);
-        let tooltip = tokenbar_core::tray_title(&visible, TitleMode::PercentText);
+        let tooltip = tokenbar_core::status_item_title(&visible, TitleMode::PercentText);
         (
             shell.settings.title_mode,
             title,
@@ -863,24 +897,11 @@ fn publish_title(cx: &mut App) {
 }
 
 fn face_for(provider: &ProviderSnapshot) -> RowFace {
-    if provider.source == "pending" && provider.used_percent.is_none() && provider.tokens.is_none()
-    {
+    if !has_panel_data(provider) {
         return RowFace {
-            value: "…".to_string(),
-            subtitle: "正在读取".to_string(),
+            value: "—".to_string(),
+            subtitle: String::new(),
             technical: String::new(),
-            quiet_value: true,
-            bar: None,
-        };
-    }
-
-    let technical = technical_line(provider);
-    if provider.used_percent.is_none() && provider.tokens.is_none() {
-        let (value, subtitle) = empty_copy(provider.id);
-        return RowFace {
-            value,
-            subtitle,
-            technical,
             quiet_value: true,
             bar: None,
         };
@@ -890,57 +911,32 @@ fn face_for(provider: &ProviderSnapshot) -> RowFace {
     if provider.detail.contains("沿用上次") {
         bits.push("沿用上次".to_string());
     }
-    if let Some(used) = provider.used_percent {
-        let remaining = provider
-            .remaining_percent
-            .unwrap_or_else(|| (100.0 - used).clamp(0.0, 100.0));
-        bits.push(format!("剩余 {}%", format_percent(remaining)));
-    }
     if let Some(reset) = provider.resets_at.as_deref() {
         let hint = reset_hint(reset);
         if !hint.is_empty() {
             bits.push(hint);
         }
-    } else if provider.used_percent.is_some() {
-        if let Some(tokens) = provider.tokens {
-            bits.push(format!("日志 {}", format_compact(tokens)));
+    }
+    if provider.used_percent.is_none() {
+        if provider.balance.is_some() && provider.tokens.is_some() {
+            if let Some(tokens) = provider.tokens {
+                bits.push(format!("本地 {}", format_compact(tokens)));
+            }
+        } else if provider.tokens.is_some() && provider.balance.is_none() {
+            bits.push("本地用量".to_string());
+        } else if provider.balance.is_some() {
+            bits.push("余额".to_string());
         }
-    } else if provider.balance.is_some() {
-        bits.push("预付余额".to_string());
-    } else {
-        bits.push("可计费，不含缓存读".to_string());
     }
     if let Some(cost) = provider.cost {
-        bits.push(format!("${cost:.2}"));
+        bits.push(format!("花费 ${cost:.2}"));
     }
     RowFace {
         value: panel_value(provider),
         subtitle: bits.join(" · "),
-        technical,
+        technical: technical_line(provider),
         quiet_value: false,
         bar: provider.used_percent,
-    }
-}
-
-fn empty_copy(id: ProviderId) -> (String, String) {
-    match id {
-        ProviderId::Cursor => (
-            "未登录".to_string(),
-            "在设置里粘贴会话，或先登录 Cursor".to_string(),
-        ),
-        ProviderId::Claude => (
-            "未登录".to_string(),
-            "在设置里粘贴 OAuth，或运行 claude /login".to_string(),
-        ),
-        ProviderId::Openai => (
-            "暂无".to_string(),
-            "登录 Codex，或在设置里粘贴 sk- 密钥".to_string(),
-        ),
-        ProviderId::Opencode => ("暂无".to_string(), "本地没有 OpenCode 会话记录".to_string()),
-        ProviderId::Deepseek => (
-            "未连接".to_string(),
-            "在设置里粘贴 DeepSeek 密钥".to_string(),
-        ),
     }
 }
 
@@ -951,7 +947,10 @@ fn panel_value(provider: &ProviderSnapshot) -> String {
         }
     }
     if let Some(used) = provider.used_percent {
-        format!("{}%", format_percent(used))
+        let remaining = provider
+            .remaining_percent
+            .unwrap_or_else(|| (100.0 - used).clamp(0.0, 100.0));
+        format!("{}%", format_percent(remaining))
     } else if let Some(tokens) = provider.tokens {
         format_compact(tokens)
     } else {
@@ -980,6 +979,22 @@ fn soften(raw: &str) -> String {
         text = text.replace(home.to_string_lossy().as_ref(), "~");
     }
     text = text.replace("expected ", "");
+    let phrases = [
+        (
+            "no Codex auth.json, OpenAI key, or session logs",
+            "还没有登录记录",
+        ),
+        ("codex oauth from auth.json", "已读取 Codex 登录"),
+        ("org usage from Settings", "组织用量"),
+        ("org usage from auth.json", "组织用量"),
+        ("jsonl ", "本地 "),
+        (" billable tokens", ""),
+        (" billable", ""),
+        (" tokens", ""),
+    ];
+    for (english, chinese) in phrases {
+        text = text.replace(english, chinese);
+    }
     loop {
         let start = text.find("https://").or_else(|| text.find("http://"));
         let Some(start) = start else {
@@ -1026,7 +1041,7 @@ fn row_id(id: ProviderId) -> &'static str {
 fn kind_name(kind: SecretKind) -> &'static str {
     match kind {
         SecretKind::CursorSession => "Cursor 会话",
-        SecretKind::ClaudeOauth => "Claude OAuth",
+        SecretKind::ClaudeOauth => "Claude 凭据",
         SecretKind::OpenaiKey => "OpenAI 密钥",
         SecretKind::DeepseekKey => "DeepSeek 密钥",
     }
@@ -1169,11 +1184,12 @@ fn setup(cx: &mut App) -> gpui_tray::Result<()> {
         .icon(brand.clone())
         .title("TokenBar")
         .tooltip("TokenBar")
-        .on_activate_with(|_token, cx| open_panel(cx))
+        .on_activate_with(|_token, cx| toggle_panel(cx, None))
         .build(cx)?;
     cx.set_global(Shell {
         tray,
         window: None,
+        shown_at: None,
         snapshot: placeholder_snapshot(),
         status: "正在读取".to_string(),
         show_settings: false,
@@ -1184,8 +1200,60 @@ fn setup(cx: &mut App) -> gpui_tray::Result<()> {
     });
     start_refresh_loop(cx);
     publish_title(cx);
+    install_click_bridge(cx);
     eprintln!("TokenBar is running in the menu bar. Click the icon to open the panel.");
     Ok(())
+}
+
+fn install_click_bridge(cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    {
+        let (tx, rx) = async_channel::unbounded();
+        crate::status_click::install(tx);
+        cx.spawn(async move |cx| {
+            while let Ok(command) = rx.recv().await {
+                cx.update(|cx| dispatch_tray_command(command, cx));
+            }
+        })
+        .detach();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = cx;
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn dispatch_tray_command(command: TrayCommand, cx: &mut App) {
+    match command {
+        TrayCommand::Toggle(anchor) => toggle_panel(cx, anchor),
+        TrayCommand::Refresh => refresh_now(cx),
+        TrayCommand::Settings => {
+            if !panel_is_open(cx) {
+                show_panel(cx, None);
+            }
+            cx.global_mut::<Shell>().show_settings = true;
+            notify_panel(cx);
+        }
+        TrayCommand::Quit => quit(cx),
+        TrayCommand::Dismiss => {
+            let recent = cx
+                .global::<Shell>()
+                .shown_at
+                .is_some_and(|opened| opened.elapsed() < Duration::from_millis(250));
+            if !recent {
+                hide_panel(cx);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn notify_panel(cx: &mut App) {
+    let window = cx.global::<Shell>().window;
+    if let Some(window) = window {
+        let _ = window.update(cx, |_panel, _window, cx| cx.notify());
+    }
 }
 
 /// macOS menu-bar apps use the accessory activation policy so they can open
@@ -1193,7 +1261,7 @@ fn setup(cx: &mut App) -> gpui_tray::Result<()> {
 /// switch, so this calls AppKit directly. `LSUIElement` in the packaged
 /// Info.plist covers launches of the `.app` bundle as well.
 #[cfg(target_os = "macos")]
-fn set_accessory() {
+fn set_activation_policy(accessory: bool) {
     use objc2::MainThreadMarker;
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 
@@ -1201,51 +1269,127 @@ fn set_accessory() {
         return;
     };
     let app = NSApplication::sharedApplication(marker);
-    let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+    let policy = if accessory {
+        NSApplicationActivationPolicy::Accessory
+    } else {
+        NSApplicationActivationPolicy::Regular
+    };
+    let _ = app.setActivationPolicy(policy);
 }
 
 #[cfg(not(target_os = "macos"))]
-fn set_accessory() {}
+fn set_activation_policy(_accessory: bool) {}
 
-fn open_panel(cx: &mut App) {
-    set_accessory();
-    if let Some(window) = cx.global::<Shell>().window {
-        let activated = window
-            .update(cx, |_panel, window, _cx| {
-                window.activate_window();
-            })
-            .is_ok();
-        if activated {
-            return;
-        }
-        cx.global_mut::<Shell>().window = None;
+fn set_accessory() {
+    set_activation_policy(true);
+}
+
+const PANEL_WIDTH: f32 = 392.0;
+const PANEL_HEIGHT: f32 = 520.0;
+
+fn panel_is_open(cx: &App) -> bool {
+    cx.global::<Shell>().window.is_some()
+}
+
+fn toggle_panel(cx: &mut App, anchor: Option<StatusAnchor>) {
+    // The status-button action and the click monitor can both see one click.
+    if !accept_toggle() {
+        return;
     }
+    if panel_is_open(cx) {
+        hide_panel(cx);
+    } else {
+        show_panel(cx, anchor);
+    }
+}
 
-    match cx.open_window(panel_options(), |_window, cx| cx.new(|_| Panel)) {
+fn accept_toggle() -> bool {
+    use std::sync::Mutex;
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    let Ok(mut last) = LAST.lock() else {
+        return true;
+    };
+    let now = Instant::now();
+    if last.is_some_and(|opened| now.duration_since(opened) < Duration::from_millis(180)) {
+        return false;
+    }
+    *last = Some(now);
+    true
+}
+
+fn hide_panel(cx: &mut App) {
+    let window = cx.global::<Shell>().window;
+    if let Some(window) = window {
+        let _ = window.update(cx, |_panel, window, _cx| window.remove_window());
+    }
+    {
+        let shell = cx.global_mut::<Shell>();
+        shell.window = None;
+        shell.shown_at = None;
+    }
+    #[cfg(target_os = "macos")]
+    crate::status_click::set_panel_open(false);
+    set_activation_policy(true);
+}
+
+fn show_panel(cx: &mut App, anchor: Option<StatusAnchor>) {
+    // Accessory policy keeps the Dock icon hidden, and it also keeps a newly
+    // opened window from coming forward. Match the menu-bar pattern: become a
+    // regular app for the time the panel is open, then drop back.
+    set_activation_policy(false);
+    cx.activate(true);
+    let origin = panel_origin(cx, anchor);
+    match cx.open_window(panel_options(origin), |_window, cx| cx.new(|_| Panel)) {
         Ok(handle) => {
             cx.global_mut::<Shell>().window = Some(handle);
-            set_accessory();
+            cx.global_mut::<Shell>().shown_at = Some(Instant::now());
+            #[cfg(target_os = "macos")]
+            crate::status_click::set_panel_open(true);
+            let _ = handle.update(cx, |_panel, window, _cx| window.activate_window());
         }
         Err(err) => {
             eprintln!("failed to open TokenBar panel: {err}");
             cx.global_mut::<Shell>().status = "无法打开面板".to_string();
+            #[cfg(target_os = "macos")]
+            crate::status_click::set_panel_open(false);
+            set_activation_policy(true);
         }
     }
 }
 
-fn panel_options() -> WindowOptions {
+fn panel_origin(cx: &App, anchor: Option<StatusAnchor>) -> Point<Pixels> {
+    #[cfg(target_os = "macos")]
+    if let Some(anchor) = anchor {
+        if let Some((x, y)) = crate::status_click::origin_under(&anchor, PANEL_WIDTH) {
+            return point(px(x), px(y));
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = anchor;
+    let width = cx
+        .primary_display()
+        .map(|display| display.bounds().size.width)
+        .unwrap_or(px(1280.));
+    point(width - px(PANEL_WIDTH) - px(12.), px(8.))
+}
+
+fn panel_options(origin: Point<Pixels>) -> WindowOptions {
     WindowOptions {
         focus: true,
         show: true,
-        is_resizable: true,
+        is_resizable: false,
+        is_movable: true,
+        is_minimizable: false,
+        kind: WindowKind::Floating,
         window_min_size: Some(size(px(360.), px(280.))),
         window_bounds: Some(WindowBounds::Windowed(Bounds {
-            origin: point(px(180.), px(72.)),
-            size: size(px(400.), px(460.)),
+            origin,
+            size: size(px(PANEL_WIDTH), px(PANEL_HEIGHT)),
         })),
         titlebar: Some(TitlebarOptions {
-            title: Some("TokenBar".into()),
-            ..Default::default()
+            title: None,
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(-80.), px(-80.))),
         }),
         ..Default::default()
     }
@@ -1263,19 +1407,40 @@ fn start_refresh_loop(cx: &mut App) {
     .detach();
 }
 
-fn tray_icon(cx: &App) -> gpui_tray::Result<Icon> {
-    let image = Image::from_bytes(ImageFormat::Svg, TRAY_SVG.to_vec());
-    let builder = Icon::from_gpui(&image, cx);
-    // Keep the navy / white / yellow mark. A template icon would flatten it.
+fn tray_icon(_cx: &App) -> gpui_tray::Result<Icon> {
+    // A template silhouette, not the full-color app mark. The color logo
+    // turns into a muddy blue ring at menu-bar size.
+    let builder = Icon::from_rgba(template_mark_pixels(), 32, 32);
     #[cfg(target_os = "macos")]
-    let builder = builder.template(false).scale_factor(2.0);
-    match builder.build() {
-        Ok(icon) => Ok(icon),
-        Err(err) => {
-            eprintln!("SVG tray icon failed ({err}); using the ring fallback");
-            ring_fallback()
+    let builder = builder.template(true).scale_factor(2.0);
+    builder.build()
+}
+
+fn template_mark_pixels() -> Vec<u8> {
+    const N: u32 = 32;
+    let mut rgba = vec![0_u8; (N * N * 4) as usize];
+    for y in 0..N {
+        for x in 0..N {
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
+            let distance = (px - 15.5).hypot(py - 15.5);
+            let ring = (1.6 - (distance - 11.2).abs()).clamp(0.0, 1.0);
+            let bar = rect_coverage(px, 3.0, 29.0) * rect_coverage(py, 13.2, 18.8);
+            let alpha = ring.max(bar);
+            if alpha <= 0.0 {
+                continue;
+            }
+            let offset = ((y * N + x) * 4) as usize;
+            rgba[offset + 3] = (alpha * 255.0).round() as u8;
         }
     }
+    rgba
+}
+
+fn rect_coverage(value: f32, start: f32, end: f32) -> f32 {
+    let enter = (value - start + 0.5).clamp(0.0, 1.0);
+    let leave = (end - value + 0.5).clamp(0.0, 1.0);
+    enter.min(leave)
 }
 
 fn meter_icon(providers: &[ProviderSnapshot]) -> gpui_tray::Result<Icon> {
@@ -1326,47 +1491,4 @@ fn remaining_rgb(remaining: f64) -> [u8; 3] {
     } else {
         [0xFF, 0x45, 0x3A]
     }
-}
-
-fn ring_fallback() -> gpui_tray::Result<Icon> {
-    const SIZE: u32 = 32;
-    let mut rgba = vec![0_u8; (SIZE * SIZE * 4) as usize];
-    let center = (SIZE as f32 - 1.0) / 2.0;
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let px = x as f32 + 0.5;
-            let py = y as f32 + 0.5;
-            if !in_rounded_square(px, py, SIZE as f32, 7.0) {
-                continue;
-            }
-            let dx = px - center;
-            let dy = py - center;
-            let on_ring = (dx.hypot(dy) - 11.6).abs() <= 2.6;
-            let on_bar = (2.2..29.8).contains(&px) && (13.4..18.6).contains(&py);
-            let (red, green, blue) = if on_bar {
-                (0xF5, 0xC5, 0x18)
-            } else if on_ring {
-                (0xFF, 0xFF, 0xFF)
-            } else {
-                (0x0B, 0x1B, 0x3A)
-            };
-            let offset = ((y * SIZE + x) * 4) as usize;
-            rgba[offset] = red;
-            rgba[offset + 1] = green;
-            rgba[offset + 2] = blue;
-            rgba[offset + 3] = 255;
-        }
-    }
-    let builder = Icon::from_rgba(rgba, SIZE, SIZE);
-    #[cfg(target_os = "macos")]
-    let builder = builder.template(false).scale_factor(2.0);
-    builder.build()
-}
-
-fn in_rounded_square(x: f32, y: f32, size: f32, radius: f32) -> bool {
-    let cx = x.clamp(radius, size - radius);
-    let cy = y.clamp(radius, size - radius);
-    let dx = x - cx;
-    let dy = y - cy;
-    dx * dx + dy * dy <= radius * radius
 }

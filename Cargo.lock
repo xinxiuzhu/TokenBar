@@ -6253,10 +6253,13 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 name = "tokenbar"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
+ "block2 0.6.2",
  "gpui-kit",
  "gpui-tray",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "tokenbar-core",
  "winres",
 ]

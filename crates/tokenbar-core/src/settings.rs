@@ -77,7 +77,7 @@ impl DisplaySettings {
             if self.shows(primary) {
                 if let Some(one) = visible.iter().find(|provider| provider.id == primary) {
                     if one.menu_label(self.title_mode).is_some() {
-                        return crate::format::tray_title(
+                        return crate::format::status_item_title(
                             std::slice::from_ref(one),
                             self.title_mode,
                         );
@@ -85,7 +85,7 @@ impl DisplaySettings {
                 }
             }
         }
-        crate::format::tray_title(&visible, self.title_mode)
+        crate::format::status_item_title(&visible, self.title_mode)
     }
 
     pub fn normalized(mut self) -> Self {
@@ -143,7 +143,7 @@ mod tests {
             show_cursor: false,
             ..DisplaySettings::default()
         };
-        assert_eq!(hidden.menu_title(&providers), "C ███░░░░░ 38");
+        assert_eq!(hidden.menu_title(&providers), "C ━━━───── 38");
         let text = DisplaySettings {
             title_mode: TitleMode::PercentText,
             ..DisplaySettings::default()
