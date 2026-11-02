@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: core tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Linux GUI libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $(cat packaging/linux/apt.txt)
+      - uses: Swatinem/rust-cache@v2
+      - name: Test tokenbar-core
+        run: cargo test -p tokenbar-core
+      - name: Check the tray app
+        run: cargo check -p tokenbar
+      - name: Package script syntax
+        if: runner.os == 'Linux'
+        run: bash -n packaging/macos/package.sh
+      - name: Linux build and offline check
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          cargo build -p tokenbar
+          output="$(TOKENBAR_OFFLINE=1 ./target/debug/tokenbar --check)"
+          printf '%s\n' "$output"
+          python3 -c 'import json,sys; data=json.loads(sys.argv[1]); assert data["title"]=="R42% C72% O1.2k", data; assert data["offline"] is True' "$output"

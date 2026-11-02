@@ -1,0 +1,15 @@
+pkg-config
+cmake
+g++
+libxkbcommon-dev
+libxkbcommon-x11-dev
+libwayland-dev
+libx11-dev
+libxcb1-dev
+libxcb-shape0-dev
+libxcb-xfixes0-dev
+libxcb-render0-dev
+libxcb-xkb-dev
+libfontconfig1-dev
+libvulkan-dev
+libssl-dev

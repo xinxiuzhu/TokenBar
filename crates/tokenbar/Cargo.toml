@@ -1,0 +1,22 @@
+[package]
+name = "tokenbar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Menu-bar tray for Cursor, Claude, and OpenAI usage"
+publish = false
+
+[[bin]]
+name = "tokenbar"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit = { version = "=0.6.6", default-features = false }
+gpui-tray = { version = "=0.3.0", default-features = false, features = ["gpui-kit"] }
+tokenbar-core = { path = "../tokenbar-core" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSRunningApplication"] }
