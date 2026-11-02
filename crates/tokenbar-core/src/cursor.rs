@@ -58,6 +58,9 @@ pub(crate) fn fetch(
             if events.tokens > 0 {
                 snapshot.tokens = Some(events.tokens);
             }
+            if events.cache_read > 0 {
+                snapshot.cache_read_tokens = Some(events.cache_read);
+            }
             let mut parts = vec![snapshot.detail.clone()];
             parts.push(format!(
                 "{} events / {} tokens in 30d{}",
@@ -340,6 +343,7 @@ fn summary_percent(summary: &Value) -> Option<f64> {
 
 struct EventPage {
     tokens: u64,
+    cache_read: u64,
     count: u64,
     truncated: bool,
 }
@@ -348,6 +352,7 @@ fn fetch_events(http: &dyn Http, headers: &[(&str, &str)]) -> Result<EventPage, 
     let (start, end) = thirty_day_millis();
     let mut page = 1u32;
     let mut tokens = 0u64;
+    let mut cache_read = 0u64;
     let mut count = 0u64;
     let mut total_count: Option<u64> = None;
     loop {
@@ -377,7 +382,9 @@ fn fetch_events(http: &dyn Http, headers: &[(&str, &str)]) -> Result<EventPage, 
             break;
         }
         for event in &events {
-            tokens = tokens.saturating_add(event_tokens(event));
+            let (billable, cached) = event_tokens(event);
+            tokens = tokens.saturating_add(billable);
+            cache_read = cache_read.saturating_add(cached);
             count = count.saturating_add(1);
         }
         let exhausted = events.len() < PAGE_SIZE as usize
@@ -390,6 +397,7 @@ fn fetch_events(http: &dyn Http, headers: &[(&str, &str)]) -> Result<EventPage, 
                     && total_count.is_none());
             return Ok(EventPage {
                 tokens,
+                cache_read,
                 count,
                 truncated,
             });
@@ -398,20 +406,22 @@ fn fetch_events(http: &dyn Http, headers: &[(&str, &str)]) -> Result<EventPage, 
     }
     Ok(EventPage {
         tokens,
+        cache_read,
         count,
         truncated: false,
     })
 }
 
-fn event_tokens(event: &Value) -> u64 {
+fn event_tokens(event: &Value) -> (u64, u64) {
     let usage = event
         .get("tokenUsage")
         .or_else(|| event.get("token_usage"))
         .unwrap_or(event);
-    json_u64(usage, &["inputTokens", "input_tokens"])
+    let billable = json_u64(usage, &["inputTokens", "input_tokens"])
         .saturating_add(json_u64(usage, &["outputTokens", "output_tokens"]))
-        .saturating_add(json_u64(usage, &["cacheWriteTokens", "cache_write_tokens"]))
-        .saturating_add(json_u64(usage, &["cacheReadTokens", "cache_read_tokens"]))
+        .saturating_add(json_u64(usage, &["cacheWriteTokens", "cache_write_tokens"]));
+    let cache_read = json_u64(usage, &["cacheReadTokens", "cache_read_tokens"]);
+    (billable, cache_read)
 }
 
 fn thirty_day_millis() -> (String, String) {
@@ -581,7 +591,8 @@ mod tests {
         });
         let snapshot = fetch(&http, &secrets, &paths);
         assert_eq!(snapshot.used_percent, Some(42.0));
-        assert_eq!(snapshot.tokens, Some(125));
+        assert_eq!(snapshot.tokens, Some(120));
+        assert_eq!(snapshot.cache_read_tokens, Some(5));
         assert_eq!(snapshot.plan.as_deref(), Some("pro"));
         assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
         let hits = http.hits.lock().unwrap();

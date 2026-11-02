@@ -19,11 +19,10 @@ use gpui_kit::{
 };
 use gpui_tray::{Icon, Tray};
 use tokenbar_core::{
-    delete_secret, placeholder_snapshot, save_secret, secret_presence, ProviderId,
-    ProviderSnapshot, SecretKind, SecretPresence, UsageSnapshot,
+    delete_secret, format_compact, format_percent, load_settings, placeholder_snapshot, reset_hint,
+    save_secret, save_settings, secret_presence, DisplaySettings, ProviderId, ProviderSnapshot,
+    SecretKind, SecretPresence, TitleMode, UsageSnapshot,
 };
-
-const REFRESH_EVERY: Duration = Duration::from_secs(300);
 const LOGO_SVG: &[u8] = include_bytes!("../../../assets/logo.svg");
 const TRAY_SVG: &[u8] = include_bytes!("../../../assets/logo-16.svg");
 
@@ -43,6 +42,8 @@ struct Shell {
     show_settings: bool,
     expanded: Option<ProviderId>,
     saved: SecretPresence,
+    settings: DisplaySettings,
+    brand_icon: Icon,
 }
 
 impl Global for Shell {}
@@ -54,19 +55,27 @@ struct RowFace {
     subtitle: String,
     technical: String,
     quiet_value: bool,
+    bar: Option<f64>,
 }
 
 impl Render for Panel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (generated, status, show_settings, saved, providers, expanded) = {
+        let (generated, status, show_settings, saved, providers, expanded, settings) = {
             let shell = cx.global::<Shell>();
             (
                 shell.snapshot.generated_at.clone(),
                 shell.status.clone(),
                 shell.show_settings,
                 shell.saved,
-                shell.snapshot.providers.clone(),
+                shell
+                    .snapshot
+                    .providers
+                    .iter()
+                    .filter(|provider| shell.settings.shows(provider.id))
+                    .cloned()
+                    .collect::<Vec<_>>(),
                 shell.expanded,
+                shell.settings.clone(),
             )
         };
         let subtitle = if status.is_empty() {
@@ -82,7 +91,7 @@ impl Render for Panel {
             .flex_col()
             .bg(rgb(BG))
             .text_color(rgb(TEXT))
-            .child(header(&subtitle, &providers))
+            .child(header(&subtitle, &providers, TitleMode::PercentText))
             .child(
                 div()
                     .id("tokenbar-body")
@@ -98,15 +107,24 @@ impl Render for Panel {
                             provider_card(provider, expanded == Some(provider.id), cx)
                         }),
                     )
+                    .when(providers.is_empty(), |parent| {
+                        parent.child(
+                            div()
+                                .px(px(4.))
+                                .text_size(px(12.))
+                                .text_color(rgb(MUTED))
+                                .child("在设置里打开要看的服务"),
+                        )
+                    })
                     .when(show_settings, |parent| {
-                        parent.child(settings_card(saved, cx))
+                        parent.child(settings_card(saved, &settings, cx))
                     }),
             )
             .child(footer(cx))
     }
 }
 
-fn header(subtitle: &str, providers: &[ProviderSnapshot]) -> impl IntoElement {
+fn header(subtitle: &str, providers: &[ProviderSnapshot], mode: TitleMode) -> impl IntoElement {
     div()
         .flex()
         .items_center()
@@ -144,12 +162,15 @@ fn header(subtitle: &str, providers: &[ProviderSnapshot]) -> impl IntoElement {
                 .flex()
                 .items_center()
                 .gap(px(8.))
-                .children(providers.iter().map(|provider| {
-                    div()
-                        .text_size(px(11.))
-                        .text_color(rgb(MUTED))
-                        .whitespace_nowrap()
-                        .child(provider.meter())
+                .children(providers.iter().filter_map(|provider| {
+                    let label = provider.menu_label(mode)?;
+                    Some(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(MUTED))
+                            .whitespace_nowrap()
+                            .child(label),
+                    )
                 })),
         )
 }
@@ -231,6 +252,7 @@ fn provider_card(
                         .child(face.value),
                 ),
         )
+        .when_some(face.bar, |card, used| card.child(usage_bar(used)))
         .when(expanded && !face.technical.is_empty(), |card| {
             card.child(
                 div()
@@ -241,7 +263,7 @@ fn provider_card(
                     .child(face.technical),
             )
         })
-        .on_click(cx.listener(move |_this, _event, _window, cx| toggle_row(id, cx)))
+        .on_click(cx.listener(move |_this, _event, _window, cx| toggle_expanded(id, cx)))
 }
 
 fn footer(cx: &mut Context<Panel>) -> impl IntoElement {
@@ -297,7 +319,37 @@ where
         .on_click(cx.listener(move |this, _event, window, cx| on_click(this, window, cx)))
 }
 
-fn settings_card(saved: SecretPresence, cx: &mut Context<Panel>) -> impl IntoElement {
+fn usage_bar(used: f64) -> impl IntoElement {
+    let pct = used.clamp(0.0, 100.0) as f32;
+    let color = if used >= 85.0 {
+        0xff453a
+    } else if used >= 60.0 {
+        0xff9f0a
+    } else {
+        0x30d158
+    };
+    div()
+        .flex()
+        .h(px(3.))
+        .w_full()
+        .mt(px(4.))
+        .rounded_full()
+        .bg(rgb(0x3a3a3c))
+        .child(
+            div()
+                .h(px(3.))
+                .flex_grow(pct.max(0.01))
+                .rounded_full()
+                .bg(rgb(color)),
+        )
+        .child(div().h(px(3.)).flex_grow((100.0 - pct).max(0.01)))
+}
+
+fn settings_card(
+    saved: SecretPresence,
+    settings: &DisplaySettings,
+    cx: &mut Context<Panel>,
+) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -313,6 +365,103 @@ fn settings_card(saved: SecretPresence, cx: &mut Context<Panel>) -> impl IntoEle
                 .text_size(px(12.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child("设置"),
+        )
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(rgb(MUTED))
+                .child("显示"),
+        )
+        .child(toggle_row(
+            "show-cursor",
+            "Cursor",
+            settings.show_cursor,
+            cx,
+            |settings| {
+                settings.show_cursor = !settings.show_cursor;
+            },
+        ))
+        .child(toggle_row(
+            "show-claude",
+            "Claude",
+            settings.show_claude,
+            cx,
+            |settings| {
+                settings.show_claude = !settings.show_claude;
+            },
+        ))
+        .child(toggle_row(
+            "show-openai",
+            "OpenAI",
+            settings.show_openai,
+            cx,
+            |settings| {
+                settings.show_openai = !settings.show_openai;
+            },
+        ))
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(rgb(MUTED))
+                .child("菜单栏"),
+        )
+        .child(
+            div()
+                .flex()
+                .gap(px(6.))
+                .child(mode_button(
+                    "mode-bars",
+                    "条状余额",
+                    settings.title_mode == TitleMode::BalanceBars,
+                    TitleMode::BalanceBars,
+                    cx,
+                ))
+                .child(mode_button(
+                    "mode-text",
+                    "百分比",
+                    settings.title_mode == TitleMode::PercentText,
+                    TitleMode::PercentText,
+                    cx,
+                ))
+                .child(mode_button(
+                    "mode-icon",
+                    "仅图标",
+                    settings.title_mode == TitleMode::IconOnly,
+                    TitleMode::IconOnly,
+                    cx,
+                )),
+        )
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(rgb(MUTED))
+                .child("刷新"),
+        )
+        .child(
+            div()
+                .flex()
+                .gap(px(6.))
+                .child(interval_button(
+                    "every-60",
+                    "1 分钟",
+                    settings.refresh_secs == 60,
+                    60,
+                    cx,
+                ))
+                .child(interval_button(
+                    "every-300",
+                    "5 分钟",
+                    settings.refresh_secs == 300,
+                    300,
+                    cx,
+                ))
+                .child(interval_button(
+                    "every-900",
+                    "15 分钟",
+                    settings.refresh_secs == 900,
+                    900,
+                    cx,
+                )),
         )
         .child(
             div()
@@ -399,13 +548,141 @@ fn secret_row(
         )
 }
 
+fn toggle_row(
+    id: &'static str,
+    label: &'static str,
+    on: bool,
+    cx: &mut Context<Panel>,
+    mutate: impl Fn(&mut DisplaySettings) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .cursor_pointer()
+        .flex()
+        .items_center()
+        .justify_between()
+        .px(px(10.))
+        .py(px(5.))
+        .rounded_md()
+        .bg(rgb(TRACK))
+        .child(div().text_size(px(12.)).child(label))
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(if on { ACCENT } else { MUTED }))
+                .child(if on { "显示" } else { "隐藏" }),
+        )
+        .on_click(cx.listener(move |_this, _event, _window, cx| {
+            commit_settings(cx, &mutate);
+        }))
+}
+
+fn mode_button(
+    id: &'static str,
+    label: &'static str,
+    selected: bool,
+    mode: TitleMode,
+    cx: &mut Context<Panel>,
+) -> impl IntoElement {
+    choice(id, label, selected, cx, move |settings| {
+        settings.title_mode = mode;
+    })
+}
+
+fn interval_button(
+    id: &'static str,
+    label: &'static str,
+    selected: bool,
+    secs: u64,
+    cx: &mut Context<Panel>,
+) -> impl IntoElement {
+    choice(id, label, selected, cx, move |settings| {
+        settings.refresh_secs = secs;
+    })
+}
+
+fn choice<F>(
+    id: &'static str,
+    label: &'static str,
+    selected: bool,
+    cx: &mut Context<Panel>,
+    mutate: F,
+) -> impl IntoElement
+where
+    F: Fn(&mut DisplaySettings) + 'static,
+{
+    div()
+        .id(id)
+        .cursor_pointer()
+        .px(px(10.))
+        .py(px(5.))
+        .rounded_md()
+        .bg(rgb(if selected { ACCENT } else { TRACK }))
+        .text_size(px(12.))
+        .text_color(rgb(if selected { 0xffffff } else { TEXT }))
+        .child(label)
+        .on_click(cx.listener(move |_this, _event, _window, cx| {
+            commit_settings(cx, &mutate);
+        }))
+}
+
+fn commit_settings(cx: &mut Context<Panel>, mutate: &impl Fn(&mut DisplaySettings)) {
+    let mut settings = cx.global::<Shell>().settings.clone();
+    mutate(&mut settings);
+    let _ = save_settings(&settings);
+    cx.global_mut::<Shell>().settings = settings;
+    publish_title(cx);
+    cx.notify();
+}
+
+fn publish_title(cx: &mut App) {
+    let (mode, title, tooltip, brand, providers) = {
+        let shell = cx.global::<Shell>();
+        let visible: Vec<ProviderSnapshot> = shell
+            .snapshot
+            .providers
+            .iter()
+            .filter(|provider| shell.settings.shows(provider.id))
+            .cloned()
+            .collect();
+        let title = shell.settings.menu_title(&shell.snapshot.providers);
+        let tooltip = tokenbar_core::tray_title(&visible, TitleMode::PercentText);
+        (
+            shell.settings.title_mode,
+            title,
+            tooltip,
+            shell.brand_icon.clone(),
+            visible,
+        )
+    };
+    let tray = cx.global::<Shell>().tray.clone();
+    let _ = tray.set_tooltip(Some(format!("TokenBar {tooltip}")), cx);
+    if mode == TitleMode::IconOnly {
+        let _ = tray.set_title(None::<String>, cx);
+        match meter_icon(&providers) {
+            Ok(icon) => {
+                let _ = tray.set_icon(icon, cx);
+            }
+            Err(_) => {
+                let _ = tray.set_icon(brand, cx);
+            }
+        }
+        return;
+    }
+    let shown = if title.is_empty() { None } else { Some(title) };
+    let _ = tray.set_title(shown, cx);
+    let _ = tray.set_icon(brand, cx);
+}
+
 fn face_for(provider: &ProviderSnapshot) -> RowFace {
-    if provider.source == "pending" {
+    if provider.source == "pending" && provider.used_percent.is_none() && provider.tokens.is_none()
+    {
         return RowFace {
             value: "…".to_string(),
             subtitle: "正在读取".to_string(),
             technical: String::new(),
             quiet_value: true,
+            bar: None,
         };
     }
 
@@ -417,26 +694,38 @@ fn face_for(provider: &ProviderSnapshot) -> RowFace {
             subtitle,
             technical,
             quiet_value: true,
+            bar: None,
         };
     }
 
-    let value = panel_value(provider);
-    let subtitle = if provider.used_percent.is_some() {
-        match (&provider.plan, provider.error.is_some()) {
-            (Some(plan), false) => format!("额度已用 · {plan}"),
-            (_, true) => "额度已用 · 在线数据不完整".to_string(),
-            (None, false) => "额度已用".to_string(),
+    let mut bits = Vec::new();
+    if provider.detail.contains("沿用上次") {
+        bits.push("沿用上次".to_string());
+    }
+    if let Some(used) = provider.used_percent {
+        let remaining = provider
+            .remaining_percent
+            .unwrap_or_else(|| (100.0 - used).clamp(0.0, 100.0));
+        bits.push(format!("剩余 {}%", format_percent(remaining)));
+    }
+    if let Some(reset) = provider.resets_at.as_deref() {
+        let hint = reset_hint(reset);
+        if !hint.is_empty() {
+            bits.push(hint);
         }
-    } else if provider.error.is_some() {
-        "本地日志 · 在线额度暂不可用".to_string()
+    } else if provider.used_percent.is_some() {
+        if let Some(tokens) = provider.tokens {
+            bits.push(format!("日志 {}", format_compact(tokens)));
+        }
     } else {
-        "本地日志".to_string()
-    };
+        bits.push("可计费，不含缓存读".to_string());
+    }
     RowFace {
-        value,
-        subtitle,
+        value: panel_value(provider),
+        subtitle: bits.join(" · "),
         technical,
         quiet_value: false,
+        bar: provider.used_percent,
     }
 }
 
@@ -458,12 +747,12 @@ fn empty_copy(id: ProviderId) -> (String, String) {
 }
 
 fn panel_value(provider: &ProviderSnapshot) -> String {
-    let meter = provider.meter();
-    let rest = meter.trim_start_matches(|ch: char| ch.is_ascii_alphabetic());
-    if rest.is_empty() || rest == "--" {
-        "—".to_string()
+    if let Some(used) = provider.used_percent {
+        format!("{}%", format_percent(used))
+    } else if let Some(tokens) = provider.tokens {
+        format_compact(tokens)
     } else {
-        rest.to_string()
+        "—".to_string()
     }
 }
 
@@ -537,7 +826,7 @@ fn kind_name(kind: SecretKind) -> &'static str {
     }
 }
 
-fn toggle_row(id: ProviderId, cx: &mut Context<Panel>) {
+fn toggle_expanded(id: ProviderId, cx: &mut Context<Panel>) {
     let current = cx.global::<Shell>().expanded;
     cx.global_mut::<Shell>().expanded = if current == Some(id) { None } else { Some(id) };
     cx.notify();
@@ -602,8 +891,34 @@ fn refresh_now(cx: &mut App) {
     .detach();
 }
 
-fn apply_snapshot(cx: &mut App, snapshot: UsageSnapshot) {
-    let title = snapshot.title.clone();
+fn keep_last_known(previous: &[ProviderSnapshot], fresh: &mut [ProviderSnapshot]) {
+    for provider in fresh {
+        if provider.used_percent.is_some() || provider.tokens.is_some() {
+            continue;
+        }
+        let Some(old) = previous.iter().find(|item| item.id == provider.id) else {
+            continue;
+        };
+        if old.used_percent.is_none() && old.tokens.is_none() {
+            continue;
+        }
+        let error = provider.error.clone();
+        let mut kept = old.clone();
+        kept.error = error.or(kept.error);
+        if !kept.detail.contains("沿用上次") {
+            kept.detail = if kept.detail.is_empty() {
+                "沿用上次".to_string()
+            } else {
+                format!("沿用上次 · {}", kept.detail)
+            };
+        }
+        *provider = kept;
+    }
+}
+
+fn apply_snapshot(cx: &mut App, mut snapshot: UsageSnapshot) {
+    let previous = cx.global::<Shell>().snapshot.providers.clone();
+    keep_last_known(&previous, &mut snapshot.providers);
     {
         let shell = cx.global_mut::<Shell>();
         shell.snapshot = snapshot;
@@ -611,11 +926,7 @@ fn apply_snapshot(cx: &mut App, snapshot: UsageSnapshot) {
             shell.status.clear();
         }
     }
-    let tray = cx.global::<Shell>().tray.clone();
-    if let Err(err) = tray.set_title(Some(title.clone()), cx) {
-        cx.global_mut::<Shell>().status = format!("托盘标题更新失败：{err}");
-    }
-    let _ = tray.set_tooltip(Some(format!("TokenBar {title}")), cx);
+    publish_title(cx);
     let window = cx.global::<Shell>().window;
     if let Some(window) = window {
         let alive = window.update(cx, |_panel, _window, cx| cx.notify()).is_ok();
@@ -647,9 +958,10 @@ pub fn run() {
 
 fn setup(cx: &mut App) -> gpui_tray::Result<()> {
     set_accessory();
+    let brand = tray_icon(cx)?;
     let tray = Tray::builder()
-        .icon(tray_icon(cx)?)
-        .title("R-- C-- O--")
+        .icon(brand.clone())
+        .title("TokenBar")
         .tooltip("TokenBar")
         .on_activate_with(|_token, cx| open_panel(cx))
         .build(cx)?;
@@ -661,8 +973,11 @@ fn setup(cx: &mut App) -> gpui_tray::Result<()> {
         show_settings: false,
         expanded: None,
         saved: secret_presence(),
+        settings: load_settings(),
+        brand_icon: brand,
     });
     start_refresh_loop(cx);
+    publish_title(cx);
     eprintln!("TokenBar is running in the menu bar. Click the icon to open the panel.");
     Ok(())
 }
@@ -736,7 +1051,8 @@ fn start_refresh_loop(cx: &mut App) {
             .background_spawn(async { tokenbar_core::collect_snapshot() })
             .await;
         cx.update(|cx| apply_snapshot(cx, snapshot));
-        cx.background_executor().timer(REFRESH_EVERY).await;
+        let wait = cx.update(|cx| Duration::from_secs(cx.global::<Shell>().settings.refresh_secs));
+        cx.background_executor().timer(wait).await;
     })
     .detach();
 }
@@ -753,6 +1069,56 @@ fn tray_icon(cx: &App) -> gpui_tray::Result<Icon> {
             eprintln!("SVG tray icon failed ({err}); using the ring fallback");
             ring_fallback()
         }
+    }
+}
+
+fn meter_icon(providers: &[ProviderSnapshot]) -> gpui_tray::Result<Icon> {
+    let rows: Vec<f64> = providers
+        .iter()
+        .filter_map(|provider| provider.used_percent.map(tokenbar_core::remaining_percent))
+        .take(3)
+        .collect();
+    if rows.is_empty() {
+        return Err(gpui_tray::Error::InvalidIcon("no quota to draw".into()));
+    }
+    const SIZE: u32 = 36;
+    let mut rgba = vec![0_u8; (SIZE * SIZE * 4) as usize];
+    let count = rows.len() as u32;
+    let bar_h = 5u32;
+    let gap = 3u32;
+    let total_h = count * bar_h + (count - 1) * gap;
+    let top = (SIZE - total_h) / 2;
+    let inset = 4u32;
+    let inner = SIZE - inset * 2;
+    for (index, remaining) in rows.iter().enumerate() {
+        let y0 = top + index as u32 * (bar_h + gap);
+        let color = remaining_rgb(*remaining);
+        let fill = ((inner as f64) * (remaining / 100.0)).round() as u32;
+        for y in y0..y0 + bar_h {
+            for x in inset..SIZE - inset {
+                let painted = if x < inset + fill {
+                    [color[0], color[1], color[2], 255]
+                } else {
+                    [0x8E, 0x8E, 0x93, 150]
+                };
+                let offset = ((y * SIZE + x) * 4) as usize;
+                rgba[offset..offset + 4].copy_from_slice(&painted);
+            }
+        }
+    }
+    let builder = Icon::from_rgba(rgba, SIZE, SIZE);
+    #[cfg(target_os = "macos")]
+    let builder = builder.template(false).scale_factor(2.0);
+    builder.build()
+}
+
+fn remaining_rgb(remaining: f64) -> [u8; 3] {
+    if remaining >= 50.0 {
+        [0x30, 0xD1, 0x58]
+    } else if remaining >= 20.0 {
+        [0xFF, 0x9F, 0x0A]
+    } else {
+        [0xFF, 0x45, 0x3A]
     }
 }
 

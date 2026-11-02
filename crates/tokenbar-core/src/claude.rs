@@ -24,19 +24,20 @@ pub(crate) fn fetch(
     paths: &ProviderPaths,
 ) -> ProviderSnapshot {
     let mut snapshot = ProviderSnapshot::empty(ProviderId::Claude);
-    let local_tokens = if paths.claude_projects.is_dir() {
+    let local = if paths.claude_projects.is_dir() {
         sum_claude_tree(&paths.claude_projects)
     } else {
-        0
+        crate::jsonl::TokenSplit::default()
     };
-    snapshot.tokens = tokens_or_none(local_tokens);
+    snapshot.tokens = tokens_or_none(local.billable);
+    snapshot.cache_read_tokens = tokens_or_none(local.cache_read);
 
     let found = match resolve_token(secrets, paths) {
         Ok(found) => found,
         Err(err) => {
             if snapshot.tokens.is_some() {
                 snapshot.source = "jsonl".to_string();
-                snapshot.detail = clip_detail([format!("{} local tokens", local_tokens), err]);
+                snapshot.detail = clip_detail([format!("{} billable tokens", local.billable), err]);
                 snapshot.error = None;
             } else {
                 snapshot.error = Some(err);
@@ -79,8 +80,11 @@ pub(crate) fn fetch(
                         parts.push(format!("{} {percent}%", window.name));
                     }
                 }
-                if local_tokens > 0 {
-                    parts.push(format!("jsonl {local_tokens} tokens"));
+                if local.billable > 0 {
+                    parts.push(format!("jsonl {} billable", local.billable));
+                }
+                if local.cache_read > 0 {
+                    parts.push(format!("cache read {}", local.cache_read));
                 }
                 snapshot.detail = clip_detail(parts);
             }
@@ -104,7 +108,8 @@ pub(crate) fn fetch(
             let message = format!("claude usage: {}", sanitize(&err));
             if snapshot.tokens.is_some() {
                 snapshot.source = "jsonl".to_string();
-                snapshot.detail = clip_detail([format!("jsonl {local_tokens} tokens"), message]);
+                snapshot.detail =
+                    clip_detail([format!("jsonl {} billable", local.billable), message]);
             } else {
                 snapshot.error = Some(message);
             }
@@ -325,7 +330,12 @@ mod tests {
         let snapshot = fetch(&http, &MemoryStore::new(), &paths);
         assert_eq!(snapshot.used_percent, Some(72.0));
         assert_eq!(snapshot.tokens, Some(15));
-        assert_eq!(snapshot.meter(), "C72%");
+        assert_eq!(
+            snapshot
+                .menu_label(crate::format::TitleMode::PercentText)
+                .as_deref(),
+            Some("C 28%")
+        );
         assert_eq!(snapshot.plan.as_deref(), Some("pro"));
         assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
         let _ = fs::remove_dir_all(dir);

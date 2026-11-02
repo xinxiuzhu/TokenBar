@@ -43,4 +43,4 @@ jobs:
           cargo build -p tokenbar
           output="$(TOKENBAR_OFFLINE=1 ./target/debug/tokenbar --check)"
           printf '%s\n' "$output"
-          python3 -c 'import json,sys; data=json.loads(sys.argv[1]); assert data["title"]=="R42% C72% O1.2k", data; assert data["offline"] is True' "$output"
+          python3 -c 'import json,sys; data=json.loads(sys.argv[1]); assert data["title"]=="R ██░░ · C █░░░ · O 1.2k", data; assert data["offline"] is True' "$output"

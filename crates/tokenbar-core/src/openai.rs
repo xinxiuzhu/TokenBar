@@ -358,7 +358,12 @@ mod tests {
         let snapshot = fetch(&http, &MemoryStore::new(), &paths);
         assert_eq!(snapshot.tokens, Some(1_200));
         assert!(snapshot.used_percent.is_none());
-        assert_eq!(snapshot.meter(), "O1.2k");
+        assert_eq!(
+            snapshot
+                .menu_label(crate::format::TitleMode::PercentText)
+                .as_deref(),
+            Some("O 1.2k")
+        );
         assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
         let _ = fs::remove_dir_all(dir);
     }
@@ -389,7 +394,12 @@ mod tests {
             }],
         };
         let snapshot = fetch(&http, &MemoryStore::new(), &paths);
-        assert_eq!(snapshot.meter(), "O12.5%");
+        assert_eq!(
+            snapshot
+                .menu_label(crate::format::TitleMode::PercentText)
+                .as_deref(),
+            Some("O 87.5%")
+        );
         assert_eq!(snapshot.plan.as_deref(), Some("pro"));
         let _ = fs::remove_dir_all(dir);
     }
