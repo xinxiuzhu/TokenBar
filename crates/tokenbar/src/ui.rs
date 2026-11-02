@@ -68,14 +68,6 @@ impl Global for Shell {}
 
 struct Panel;
 
-struct RowFace {
-    value: String,
-    subtitle: String,
-    technical: String,
-    quiet_value: bool,
-    bar: Option<f64>,
-}
-
 impl Render for Panel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (generated, status, show_settings, saved, providers, expanded, settings) = {
@@ -239,24 +231,12 @@ fn panel_rank(id: ProviderId) -> u8 {
     }
 }
 
-fn accent(id: ProviderId) -> u32 {
-    match id {
-        ProviderId::Claude => 0xcc785c,
-        ProviderId::Openai => 0x10a37f,
-        ProviderId::Opencode => 0x7c5cff,
-        ProviderId::Deepseek => 0x4d6bfe,
-        ProviderId::Cursor => 0xf5c518,
-    }
-}
-
 fn provider_card(
     provider: &ProviderSnapshot,
     expanded: bool,
     cx: &mut Context<Panel>,
 ) -> impl IntoElement {
-    let face = face_for(provider);
     let id = provider.id;
-    let value_color = if face.quiet_value { MUTED } else { TEXT };
     let windows: Vec<_> = provider
         .windows
         .iter()
@@ -265,114 +245,205 @@ fn provider_card(
         .cloned()
         .collect();
     let models: Vec<_> = provider.models.iter().take(6).cloned().collect();
+    let secondary = secondary_line(provider);
+    let failure = plan_failure_line(provider);
+    let balance = provider.balance.clone().filter(|_| windows.is_empty());
     div()
         .id(row_id(id))
         .cursor_pointer()
         .flex()
+        .flex_col()
+        .gap(px(12.))
         .rounded_lg()
         .bg(rgb(CARD))
         .border_1()
         .border_color(rgb(LINE))
-        .overflow_hidden()
-        .child(div().w(px(3.)).bg(rgb(accent(id))))
+        .px(px(14.))
+        .py(px(12.))
         .child(
             div()
-                .flex_grow_1()
                 .flex()
-                .flex_col()
-                .gap(px(6.))
-                .px(px(12.))
-                .py(px(10.))
+                .items_center()
+                .justify_between()
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .justify_between()
+                        .gap(px(10.))
+                        .child(provider_mark(id))
                         .child(
                             div()
-                                .flex()
-                                .items_center()
-                                .gap(px(8.))
-                                .child(
-                                    div()
-                                        .text_size(px(14.))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child(provider.label.clone()),
-                                )
-                                .when_some(provider.plan.clone(), |row, plan| {
-                                    row.child(
-                                        div()
-                                            .text_size(px(10.))
-                                            .text_color(rgb(accent(id)))
-                                            .child(plan),
-                                    )
-                                }),
-                        )
-                        .child(
-                            div()
-                                .text_size(
-                                    if provider.used_percent.is_none() && provider.balance.is_some()
-                                    {
-                                        px(20.)
-                                    } else {
-                                        px(15.)
-                                    },
-                                )
+                                .text_size(px(15.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(value_color))
-                                .whitespace_nowrap()
-                                .child(face.value.clone()),
+                                .child(provider_name(id)),
                         ),
                 )
-                .when(!windows.is_empty(), |card| {
-                    card.children(windows.iter().map(|window| {
+                .when_some(provider.plan.clone(), |row, plan| {
+                    row.child(plan_badge(plan))
+                })
+                .when(provider.plan.is_none() && balance.is_some(), |row| {
+                    row.child(
+                        div()
+                            .text_size(px(18.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(balance.clone().unwrap_or_default()),
+                    )
+                }),
+        )
+        .when(!windows.is_empty(), |card| {
+            card.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.))
+                    .children(windows.iter().map(|window| {
                         gauge(
                             tokenbar_core::window_label(&window.name),
                             window.used_percent.unwrap_or(0.0),
                             window.resets_at.as_deref(),
                         )
-                    }))
-                })
-                .when(windows.is_empty(), |card| {
-                    card.when_some(face.bar, |inner, used| inner.child(usage_bar(used)))
-                })
-                .when(!face.subtitle.is_empty(), |card| {
-                    card.child(
+                    })),
+            )
+        })
+        .when(windows.is_empty() && balance.is_none(), |card| {
+            card.child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(MUTED))
+                    .child("暂无计划窗口"),
+            )
+        })
+        .when_some(secondary, |card, line| {
+            card.child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(line))
+        })
+        .when_some(failure, |card, line| {
+            card.child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(0xff9f0a))
+                    .whitespace_normal()
+                    .child(line),
+            )
+        })
+        .when(expanded && !models.is_empty(), |card| {
+            card.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .children(models.iter().map(|model| {
                         div()
+                            .flex()
+                            .justify_between()
                             .text_size(px(11.))
-                            .line_height(px(15.))
                             .text_color(rgb(MUTED))
-                            .whitespace_normal()
-                            .child(face.subtitle.clone()),
-                    )
-                })
-                .when(expanded, |card| {
-                    card.when(!models.is_empty(), |inner| {
-                        inner.child(div().flex().flex_col().gap(px(2.)).children(
-                            models.iter().map(|model| {
-                                div()
-                                    .flex()
-                                    .justify_between()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(MUTED))
-                                    .child(model.name.clone())
-                                    .child(model_side(model))
-                            }),
-                        ))
-                    })
-                    .when(!face.technical.is_empty(), |inner| {
-                        inner.child(
-                            div()
-                                .text_size(px(11.))
-                                .line_height(px(15.))
-                                .text_color(rgb(MUTED))
-                                .whitespace_normal()
-                                .child(face.technical),
-                        )
-                    })
-                }),
-        )
+                            .child(model.name.clone())
+                            .child(model_side(model))
+                    })),
+            )
+        })
         .on_click(cx.listener(move |_this, _event, _window, cx| toggle_expanded(id, cx)))
+}
+
+fn provider_name(id: ProviderId) -> &'static str {
+    match id {
+        ProviderId::Openai => "Codex",
+        other => other.label(),
+    }
+}
+
+fn provider_mark(id: ProviderId) -> impl IntoElement {
+    let (text, bg) = match id {
+        ProviderId::Claude => ("C", 0xd97757),
+        ProviderId::Openai => ("Cx", 0x10a37f),
+        ProviderId::Cursor => ("Cu", 0x7c6cf6),
+        ProviderId::Opencode => ("Oc", 0x7c5cff),
+        ProviderId::Deepseek => ("Ds", 0x4d6bfe),
+    };
+    div()
+        .w(px(28.))
+        .h(px(28.))
+        .rounded(px(8.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(rgb(bg))
+        .text_size(px(if text.len() > 1 { 11. } else { 14. }))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(0xffffff))
+        .child(text)
+}
+
+fn plan_badge(plan: String) -> impl IntoElement {
+    div()
+        .px(px(8.))
+        .py(px(2.))
+        .rounded_full()
+        .bg(rgb(0x2a2a2e))
+        .text_size(px(11.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(TEXT))
+        .child(plan)
+}
+
+fn secondary_line(provider: &ProviderSnapshot) -> Option<String> {
+    let mut bits = Vec::new();
+    if provider.detail.contains("沿用上次") {
+        bits.push("沿用上次".to_string());
+    }
+    if let Some(tokens) = provider.tokens {
+        if tokens > 0 {
+            bits.push(format!("本地用量 {}", format_compact(tokens)));
+        }
+    }
+    if let Some(cost) = provider.cost {
+        bits.push(format!("花费 ${cost:.2}"));
+    }
+    if provider
+        .windows
+        .iter()
+        .any(|window| window.used_percent.is_some())
+    {
+        if let Some(balance) = &provider.balance {
+            bits.push(format!("余额 {balance}"));
+        }
+    }
+    if bits.is_empty() {
+        None
+    } else {
+        Some(bits.join(" · "))
+    }
+}
+
+fn plan_failure_line(provider: &ProviderSnapshot) -> Option<String> {
+    if provider
+        .windows
+        .iter()
+        .any(|window| window.used_percent.is_some())
+    {
+        return None;
+    }
+    let blob = format!(
+        "{} {}",
+        provider.error.as_deref().unwrap_or(""),
+        provider.detail
+    );
+    let lower = blob.to_ascii_lowercase();
+    if lower.contains("error sending request")
+        || lower.contains("timed out")
+        || lower.contains("connection")
+        || lower.contains("dns")
+        || lower.contains("network")
+        || lower.contains("wham")
+        || lower.contains("http ")
+        || lower.contains("invalid json")
+    {
+        return Some("用量服务暂时连不上，点刷新重试".to_string());
+    }
+    if provider.error.is_some() && provider.windows.is_empty() {
+        return Some("暂时读不到计划额度，点刷新重试".to_string());
+    }
+    None
 }
 
 fn gauge(label: impl Into<String>, used: f64, resets_at: Option<&str>) -> impl IntoElement {
@@ -385,9 +456,9 @@ fn gauge(label: impl Into<String>, used: f64, resets_at: Option<&str>) -> impl I
             Some(hint)
         }
     });
-    let ink = if used >= 85.0 {
+    let ink = if remaining < 15.0 {
         0xff453a
-    } else if used >= 60.0 {
+    } else if remaining < 40.0 {
         0xff9f0a
     } else {
         0x30d158
@@ -395,7 +466,7 @@ fn gauge(label: impl Into<String>, used: f64, resets_at: Option<&str>) -> impl I
     div()
         .flex()
         .flex_col()
-        .gap(px(4.))
+        .gap(px(6.))
         .child(
             div()
                 .flex()
@@ -403,23 +474,47 @@ fn gauge(label: impl Into<String>, used: f64, resets_at: Option<&str>) -> impl I
                 .justify_between()
                 .child(
                     div()
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::MEDIUM)
+                        .text_size(px(13.))
                         .text_color(rgb(TEXT))
                         .child(label.into()),
                 )
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(px(15.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(ink))
                         .child(format!("剩余 {}%", format_percent(remaining))),
                 ),
         )
-        .child(usage_bar(used))
+        .child(remaining_bar(remaining))
         .when_some(reset, |row, hint| {
-            row.child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(hint))
+            row.child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(hint))
         })
+}
+
+fn remaining_bar(remaining: f64) -> impl IntoElement {
+    let pct = remaining.clamp(0.0, 100.0) as f32;
+    let color = if remaining < 15.0 {
+        0xff453a
+    } else if remaining < 40.0 {
+        0xff9f0a
+    } else {
+        0x30d158
+    };
+    div()
+        .flex()
+        .h(px(8.))
+        .w_full()
+        .rounded_full()
+        .bg(rgb(0x3a3a3c))
+        .child(
+            div()
+                .h(px(8.))
+                .flex_grow(pct.max(0.01))
+                .rounded_full()
+                .bg(rgb(color)),
+        )
+        .child(div().h(px(8.)).flex_grow((100.0 - pct).max(0.01)))
 }
 
 fn model_side(model: &tokenbar_core::ModelUsage) -> String {
@@ -480,32 +575,6 @@ where
         .text_color(rgb(ink))
         .child(label)
         .on_click(cx.listener(move |this, _event, window, cx| on_click(this, window, cx)))
-}
-
-fn usage_bar(used: f64) -> impl IntoElement {
-    let pct = used.clamp(0.0, 100.0) as f32;
-    let color = if used >= 85.0 {
-        0xff453a
-    } else if used >= 60.0 {
-        0xff9f0a
-    } else {
-        0x30d158
-    };
-    div()
-        .flex()
-        .h(px(6.))
-        .w_full()
-        .mt(px(1.))
-        .rounded_full()
-        .bg(rgb(0x3a3a3c))
-        .child(
-            div()
-                .h(px(6.))
-                .flex_grow(pct.max(0.01))
-                .rounded_full()
-                .bg(rgb(color)),
-        )
-        .child(div().h(px(6.)).flex_grow((100.0 - pct).max(0.01)))
 }
 
 fn settings_card(
@@ -913,140 +982,6 @@ fn publish_title(cx: &mut App) {
     let shown = if title.is_empty() { None } else { Some(title) };
     let _ = tray.set_title(shown, cx);
     let _ = tray.set_icon(brand, cx);
-}
-
-fn face_for(provider: &ProviderSnapshot) -> RowFace {
-    if !has_panel_data(provider) {
-        return RowFace {
-            value: "—".to_string(),
-            subtitle: String::new(),
-            technical: String::new(),
-            quiet_value: true,
-            bar: None,
-        };
-    }
-
-    let mut bits = Vec::new();
-    if provider.detail.contains("沿用上次") {
-        bits.push("沿用上次".to_string());
-    }
-    let has_windows = provider
-        .windows
-        .iter()
-        .any(|window| window.used_percent.is_some());
-    if !has_windows {
-        if let Some(reset) = provider.resets_at.as_deref() {
-            let hint = reset_hint(reset);
-            if !hint.is_empty() {
-                bits.push(hint);
-            }
-        }
-    }
-    if has_windows {
-        if let Some(tokens) = provider.tokens {
-            if tokens > 0 {
-                bits.push(format!("本地 {}", format_compact(tokens)));
-            }
-        }
-    } else if provider.used_percent.is_none() {
-        if provider.balance.is_some() && provider.tokens.is_some() {
-            if let Some(tokens) = provider.tokens {
-                bits.push(format!("本地 {}", format_compact(tokens)));
-            }
-        } else if provider.tokens.is_some() && provider.balance.is_none() {
-            bits.push("本地用量".to_string());
-        } else if provider.balance.is_some() {
-            bits.push("余额".to_string());
-        }
-    }
-    if let Some(cost) = provider.cost {
-        bits.push(format!("花费 ${cost:.2}"));
-    }
-    RowFace {
-        value: panel_value(provider),
-        subtitle: bits.join(" · "),
-        technical: technical_line(provider),
-        quiet_value: false,
-        bar: provider.used_percent,
-    }
-}
-
-fn panel_value(provider: &ProviderSnapshot) -> String {
-    if provider.used_percent.is_none() {
-        if let Some(balance) = &provider.balance {
-            return balance.clone();
-        }
-    }
-    if let Some(used) = provider.used_percent {
-        let remaining = provider
-            .remaining_percent
-            .unwrap_or_else(|| (100.0 - used).clamp(0.0, 100.0));
-        format!("{}%", format_percent(remaining))
-    } else if let Some(tokens) = provider.tokens {
-        format_compact(tokens)
-    } else {
-        "—".to_string()
-    }
-}
-
-fn technical_line(provider: &ProviderSnapshot) -> String {
-    let mut parts = Vec::new();
-    if !provider.detail.is_empty()
-        && provider.detail != "Refreshing"
-        && provider.detail != "offline stub"
-    {
-        parts.push(soften(&provider.detail));
-    }
-    if let Some(error) = &provider.error {
-        parts.push(soften(error));
-    }
-    let text = parts.join(" · ");
-    truncate_chars(&text, 120)
-}
-
-fn soften(raw: &str) -> String {
-    let mut text = raw.trim().to_string();
-    if let Some(home) = std::env::var_os("HOME") {
-        text = text.replace(home.to_string_lossy().as_ref(), "~");
-    }
-    text = text.replace("expected ", "");
-    let phrases = [
-        (
-            "no Codex auth.json, OpenAI key, or session logs",
-            "还没有登录记录",
-        ),
-        ("codex oauth from auth.json", "已读取 Codex 登录"),
-        ("org usage from Settings", "组织用量"),
-        ("org usage from auth.json", "组织用量"),
-        ("jsonl ", "本地 "),
-        (" billable tokens", ""),
-        (" billable", ""),
-        (" tokens", ""),
-    ];
-    for (english, chinese) in phrases {
-        text = text.replace(english, chinese);
-    }
-    loop {
-        let start = text.find("https://").or_else(|| text.find("http://"));
-        let Some(start) = start else {
-            break;
-        };
-        let rest = &text[start..];
-        let end = rest
-            .find(|ch: char| ch.is_whitespace() || ch == ')')
-            .unwrap_or(rest.len());
-        text.replace_range(start..start + end, "网络");
-    }
-    text
-}
-
-fn truncate_chars(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let mut shortened: String = text.chars().take(max.saturating_sub(1)).collect();
-    shortened.push('…');
-    shortened
 }
 
 fn clock_label(generated_at: &str) -> String {

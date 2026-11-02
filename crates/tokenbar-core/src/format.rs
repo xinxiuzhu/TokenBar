@@ -110,9 +110,9 @@ fn percent_label(prefix: &str, used_percent: Option<f64>, tokens: Option<u64>) -
     }
 }
 
-/// Menu-bar text. Quota providers become a thin remaining meter. A raw token
-/// total such as `O 9.7M` is shown only when nothing has a plan percent, so
-/// billable millions do not sit beside the meters.
+/// Menu-bar text. Plan windows become a remaining meter. A raw token total
+/// is not a headline: OpenCode may show a compact count, everyone else stays
+/// on the icon until a plan percent or balance exists.
 pub fn status_item_title(providers: &[ProviderSnapshot], mode: TitleMode) -> String {
     if mode == TitleMode::IconOnly {
         return String::new();
@@ -130,7 +130,7 @@ pub fn status_item_title(providers: &[ProviderSnapshot], mode: TitleMode) -> Str
         })
         .collect();
     if visible.is_empty() {
-        return "TokenBar".to_string();
+        return String::new();
     }
     let quota_count = visible
         .iter()
@@ -149,7 +149,7 @@ pub fn status_item_title(providers: &[ProviderSnapshot], mode: TitleMode) -> Str
             .filter_map(|provider| status_percent(provider, hide_token_totals))
             .collect();
         return if parts.is_empty() {
-            "TokenBar".to_string()
+            String::new()
         } else {
             parts.join(" · ")
         };
@@ -160,7 +160,7 @@ pub fn status_item_title(providers: &[ProviderSnapshot], mode: TitleMode) -> Str
         .filter_map(|provider| status_balance(provider, cells, quota_count == 1, hide_token_totals))
         .collect();
     if parts.is_empty() {
-        "TokenBar".to_string()
+        String::new()
     } else {
         parts.join(" · ")
     }
@@ -176,7 +176,7 @@ fn status_percent(provider: &ProviderSnapshot, hide_token_totals: bool) -> Optio
     if let Some(balance) = &provider.balance {
         return Some(format!("{} {balance}", provider.prefix));
     }
-    if hide_token_totals {
+    if hide_token_totals || provider.id != crate::model::ProviderId::Opencode {
         return None;
     }
     provider
@@ -208,7 +208,7 @@ fn status_balance(
         }
     } else if let Some(balance) = &provider.balance {
         Some(format!("{} {balance}", provider.prefix))
-    } else if hide_token_totals {
+    } else if hide_token_totals || provider.id != crate::model::ProviderId::Opencode {
         None
     } else {
         provider
@@ -275,14 +275,14 @@ fn tray_window_label(name: &str) -> String {
 /// Panel name for a plan window.
 pub fn window_label(name: &str) -> String {
     match name {
-        "five_hour" | "会话" | "session" => "5 小时".to_string(),
-        "seven_day" | "每周" | "week" => "每周".to_string(),
-        "seven_day_opus" => "Opus 每周".to_string(),
-        "seven_day_sonnet" => "Sonnet 每周".to_string(),
-        "seven_day_oauth_apps" => "应用每周".to_string(),
-        "plan" | "套餐" => "套餐".to_string(),
-        "api" | "API" => "API".to_string(),
-        "auto" | "Auto" => "Auto".to_string(),
+        "five_hour" | "会话" | "session" => "会话".to_string(),
+        "seven_day" | "每周" | "week" => "周限".to_string(),
+        "seven_day_opus" => "Opus 周限".to_string(),
+        "seven_day_sonnet" => "Sonnet 周限".to_string(),
+        "seven_day_oauth_apps" => "应用周限".to_string(),
+        "plan" | "套餐" => "套餐额度".to_string(),
+        "api" | "API" => "API 用量".to_string(),
+        "auto" | "Auto" => "Auto 用量".to_string(),
         other => other.to_string(),
     }
 }
@@ -388,7 +388,7 @@ pub fn reset_hint(resets_at: &str) -> String {
     if secs < 48 * 3600 {
         return format!("{} 小时后重置", (secs / 3600).max(1));
     }
-    format!("重置 {}", resets_at.get(5..16).unwrap_or(resets_at))
+    format!("重置于 {}", resets_at.get(5..16).unwrap_or(resets_at))
 }
 
 /// `TOKENBAR_OFFLINE=1` selects the stub snapshot. Other values do not.
@@ -490,7 +490,7 @@ mod tests {
         let both = status_item_title(&[claude.clone(), openai.clone()], TitleMode::BalanceBars);
         assert_eq!(both, "C ━━────── 28");
         let only_tokens = status_item_title(&[openai], TitleMode::BalanceBars);
-        assert_eq!(only_tokens, "O 9.7M");
+        assert_eq!(only_tokens, "");
         let text = status_item_title(&[claude], TitleMode::PercentText);
         assert_eq!(text, "C 28%");
     }
